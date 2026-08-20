@@ -8,6 +8,7 @@ from .models import AutoEditorError, Scene, Script
 
 
 DEFAULT_VOICES = {"en": "am_eric", "vi": "hung_thinh"}
+DEFAULT_SPEED = 1.08
 
 
 def _require_scene(raw: Any, position: int) -> Scene:
@@ -51,7 +52,7 @@ def load_script(path: Path, videos_dir: Path, *, validate_videos: bool = True) -
     voice = raw.get("voice") or DEFAULT_VOICES[language]
     if not isinstance(voice, str) or not voice.strip():
         raise AutoEditorError("'voice' không được để trống.")
-    speed = raw.get("speed", 1.0)
+    speed = raw.get("speed", DEFAULT_SPEED)
     if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0.25 <= float(speed) <= 4.0:
         raise AutoEditorError("'speed' phải là số trong khoảng 0.25..4.0.")
     raw_scenes = raw.get("scenes")

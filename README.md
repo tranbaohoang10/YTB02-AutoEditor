@@ -70,7 +70,7 @@ Sau đó sửa `input\script.json` bằng editor hỗ trợ UTF-8:
   "title": "Demo",
   "language": "en",
   "voice": "am_eric",
-  "speed": 1.0,
+  "speed": 1.08,
   "scenes": [
     {
       "id": 1,
@@ -89,6 +89,7 @@ Quy tắc quan trọng:
 - `video` là tên file trong `input/videos`, không phải command hay đường dẫn tùy ý.
 - `text` không được rỗng.
 - Hỗ trợ từ 1 đến N scene, không giới hạn cứng 30 scene.
+- Nếu bỏ field `speed`, tốc độ narration mặc định là `1.08`. Giá trị explicit luôn được tôn trọng: đặt `"speed": 1.0` để dùng tốc độ 1.0 hoặc chọn giá trị khác như `1.15`.
 
 ## 6. English voice
 
@@ -97,6 +98,8 @@ Dùng `"language": "en"`. Voice mặc định là `am_eric`. Kokoro English đư
 ## 7. Vietnamese voice
 
 Dùng `"language": "vi"`. Voice mặc định là `hung_thinh`. File JSON, SRT và ASS đều được ghi Unicode để giữ dấu tiếng Việt.
+
+Narration sau khi ghép scene được FFmpeg `loudnorm` về khoảng `-18 LUFS`, true peak không quá target `-1.5 dBTP` và LRA target `7 LU`, giúp âm lượng ổn định hơn giữa các video. Đây là normalization biên độ, không time-stretch và không đổi word timestamps; forced alignment vẫn chạy trên WAV scene gốc. Với audio rất ngắn hoặc đặc thù, loudness đo thực tế có thể lệch nhẹ so với target và không được quảng cáo là tuyệt đối hoàn hảo.
 
 ## 8. Chạy CHECK.bat
 
