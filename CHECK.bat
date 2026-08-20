@@ -50,9 +50,37 @@ if exist "%KOKORO_PY%" (
   set "CHECK_FAILED=1"
 )
 
-if exist "input\script.json" (echo [OK] input\script.json) else (echo [WARN] input\script.json is missing)
+set "SCRIPT_READY=0"
+if exist "input\script.json" (
+  echo [OK] input\script.json
+  set "SCRIPT_READY=1"
+) else (
+  echo [FAIL] input\script.json is missing.
+  echo        Copy input\script.example.json to input\script.json, then edit it.
+  set "CHECK_FAILED=1"
+)
 for /f %%I in ('dir /b /a-d "input\videos" 2^>nul ^| findstr /v /i /x ".gitkeep" ^| find /v /c ""') do set "CLIP_COUNT=%%I"
 echo [INFO] Video clips in input\videos: !CLIP_COUNT!
+if "!CLIP_COUNT!"=="0" (
+  echo [FAIL] No user video clips were found in input\videos.
+  echo        Copy at least one clip into input\videos and reference it in input\script.json.
+  set "CHECK_FAILED=1"
+)
+
+if exist "%PROJECT_PY%" (
+  if "!SCRIPT_READY!"=="1" (
+    if not "!CLIP_COUNT!"=="0" (
+      echo [INFO] Validating script JSON and referenced video clips...
+      "%PROJECT_PY%" -m src.pipeline --script input\script.json --config config.json --dry-run
+      if errorlevel 1 (
+        echo [FAIL] Script or video validation failed. Read the ERROR above.
+        set "CHECK_FAILED=1"
+      ) else (
+        echo [OK] Script JSON and referenced video clips are valid.
+      )
+    )
+  )
+)
 
 echo ========================================
 if "%CHECK_FAILED%"=="0" (echo CHECK COMPLETE - environment is ready) else (echo CHECK COMPLETE - fix the FAIL items above)
