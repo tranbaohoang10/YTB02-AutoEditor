@@ -64,9 +64,19 @@ def concat_audio_scenes(
     command = [
         config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-f", "concat", "-safe", "0", "-i", str(concat_file),
+    ]
+    if config.audio.normalize_loudness:
+        command.extend([
+            "-af",
+            (
+                f"loudnorm=I={config.audio.target_lufs}:"
+                f"TP={config.audio.true_peak_db}:LRA={config.audio.lra}"
+            ),
+        ])
+    command.extend([
         "-ar", str(config.audio.sample_rate), "-ac", "1",
         "-c:a", "pcm_s16le", str(destination),
-    ]
+    ])
     run_media_command(command, "ghép narration")
 
 

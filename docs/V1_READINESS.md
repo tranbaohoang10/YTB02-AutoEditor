@@ -147,7 +147,7 @@ Quy ước:
 
 | Mục | Trạng thái | Evidence |
 |---|---|---|
-| K1 | PASS | 40/40 unit tests PASS, gồm contract tests cho CHECK validation. |
+| K1 | PASS | 45/45 unit tests PASS, gồm CHECK, speed default và loudnorm command contracts. |
 | K2 | PASS | Bugs punctuation/alignment review đã có regression tests. |
 | K3 | PASS | Main CI run cho `9fed9a7` SUCCESS. |
 | K4 | PASS | Python compileall PASS. |
@@ -196,3 +196,14 @@ Final acceptance được chạy lại từ đầu trên `main` commit `9fed9a7`
 - FFmpeg/ffprobe và Kokoro environment vẫn là prerequisite local theo README.
 - Lần alignment đầu cần internet để tải model; các lần sau reuse `.cache/alignment`.
 - Forced alignment có validation nhưng không được coi là hoàn hảo với mọi audio; failure luôn explicit và không có proportional fallback.
+
+## Post-V1: narration audio tuning
+
+Issue #11 giữ nguyên toàn bộ V1 invariants và bổ sung:
+
+- Default narration speed `1.08`; explicit `1.0`, `1.15` hoặc giá trị hợp lệ khác vẫn được tôn trọng.
+- `voice.wav` được FFmpeg loudnorm sau concat với target khoảng `-18 LUFS`, `-1.5 dBTP`, LRA `7 LU`; scene WAV gốc vẫn là nguồn duration/alignment.
+- Real speed smoke cùng text/voice: 1.00 = 3.925 giây, 1.08 = 3.800 giây.
+- Real single-scene loudness: `-24.77` → `-18.33 LUFS`; true peak sau normalize `-3.58 dBTP`; duration giữ 3.800 giây.
+- Isolated two-scene E2E: `voice.wav -17.70 LUFS / -2.53 dBTP`, final AAC `-17.72 LUFS / -2.54 dBTP`, duration 6.250 giây.
+- Forced alignment, rolling subtitle, real no-future-word, ASS, trim/freeze và final ffprobe đều PASS sau normalization.

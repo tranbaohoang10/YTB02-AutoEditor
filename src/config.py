@@ -23,6 +23,10 @@ class AudioConfig:
     sample_rate: int
     aac_bitrate: str
     gap_ms: int
+    normalize_loudness: bool
+    target_lufs: float
+    true_peak_db: float
+    lra: float
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,9 @@ def load_config(path: Path) -> AppConfig:
         fallback_value = alignment["allow_approximate_fallback"]
         if not isinstance(fallback_value, bool):
             raise TypeError("alignment.allow_approximate_fallback phải là boolean")
+        normalize_loudness = audio.get("normalize_loudness", True)
+        if not isinstance(normalize_loudness, bool):
+            raise TypeError("audio.normalize_loudness phải là boolean")
         kokoro_python = Path(str(data["kokoro_python"]))
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
@@ -96,6 +103,10 @@ def load_config(path: Path) -> AppConfig:
                 sample_rate=int(audio["sample_rate"]),
                 aac_bitrate=str(audio["aac_bitrate"]),
                 gap_ms=int(audio["gap_ms"]),
+                normalize_loudness=normalize_loudness,
+                target_lufs=float(audio.get("target_lufs", -18.0)),
+                true_peak_db=float(audio.get("true_peak_db", -1.5)),
+                lra=float(audio.get("lra", 7.0)),
             ),
             subtitles=SubtitleConfig(
                 font=str(subtitles["font"]), font_size=int(subtitles["font_size"]),
@@ -123,6 +134,12 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("Kích thước và FPS trong config phải lớn hơn 0.")
     if result.audio.sample_rate <= 0 or result.audio.gap_ms < 0:
         raise AutoEditorError("sample_rate phải > 0 và gap_ms phải >= 0.")
+    if not -70.0 <= result.audio.target_lufs <= -5.0:
+        raise AutoEditorError("audio.target_lufs phải trong khoảng -70..-5 LUFS.")
+    if not -9.0 <= result.audio.true_peak_db <= 0.0:
+        raise AutoEditorError("audio.true_peak_db phải trong khoảng -9..0 dBTP.")
+    if not 1.0 <= result.audio.lra <= 50.0:
+        raise AutoEditorError("audio.lra phải trong khoảng 1..50 LU.")
     if result.alignment.engine != "whisperx":
         raise AutoEditorError("alignment.engine hiện chỉ hỗ trợ 'whisperx'.")
     if result.alignment.device != "cpu":
