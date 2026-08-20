@@ -1,0 +1,18 @@
+{
+  "title": "Black Wednesday",
+  "language": "en",
+  "voice": "am_eric",
+  "speed": 1.0,
+  "scenes": [
+    {
+      "id": 1,
+      "video": "scene_01.mp4",
+      "text": "Before sunrise in London the Bank of England was already preparing for a fight."
+    },
+    {
+      "id": 2,
+      "video": "scene_02.mp4",
+      "text": "Traders attacked the British pound and sold sterling across global markets."
+    }
+  ]
+}

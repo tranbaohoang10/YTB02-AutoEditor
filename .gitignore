@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+input/script.json
+input/videos/*
+!input/videos/.gitkeep
+
+output/*
+!output/.gitkeep
+work/*
+!work/.gitkeep

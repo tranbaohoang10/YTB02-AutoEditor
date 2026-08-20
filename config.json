@@ -1,0 +1,26 @@
+{
+  "kokoro_python": "H:\\KokoroCPU\\.venv\\Scripts\\python.exe",
+  "ffmpeg": "ffmpeg",
+  "ffprobe": "ffprobe",
+  "video": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "codec": "libx264",
+    "crf": 20,
+    "preset": "medium"
+  },
+  "audio": {
+    "sample_rate": 24000,
+    "aac_bitrate": "192k",
+    "gap_ms": 0
+  },
+  "subtitles": {
+    "font": "Arial",
+    "font_size": 52,
+    "margin_bottom": 70,
+    "outline": 3,
+    "max_chars_per_line": 42,
+    "max_lines": 2
+  }
+}
