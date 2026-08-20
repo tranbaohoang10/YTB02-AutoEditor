@@ -2,7 +2,7 @@
 
 Ngày audit: 2026-08-20  
 Baseline đã merge: `8664c8b4afb05966817929e6a9708ab99a1278b1`  
-Trạng thái tổng: **NEEDS_WORK**
+Trạng thái tổng: **NEEDS_WORK** — không còn code gap sau Issue #7; chờ final acceptance trên `main`.
 
 Quy ước:
 
@@ -27,9 +27,9 @@ Quy ước:
 
 | Mục | Trạng thái | Evidence |
 |---|---|---|
-| B1 | NEEDS_WORK | `CHECK.bat` kiểm tra các dependency/config/import và đếm clip, nhưng thiếu script chỉ là `[WARN]`; script JSON và video references chưa được dry-run validate nên vẫn có thể báo environment ready khi chưa build-ready. |
+| B1 | PASS | CHECK kiểm tra dependency/config/import, yêu cầu script + ít nhất một clip và chạy pipeline `--dry-run` để validate JSON/video references mà không render. |
 | B2 | PASS | CHECK chỉ import package/đọc cache, không gọi load model hoặc download. |
-| B3 | NEEDS_WORK | Phần lớn message rõ, nhưng kết luận `environment is ready` khi thiếu script/clip gây hiểu nhầm cho người không biết code. |
+| B3 | PASS | Missing script/clip và dry-run failure đều có `[FAIL]` cùng hướng khắc phục; CHECK chỉ báo ready khi không còn lỗi. |
 
 ## C. Script validation
 
@@ -145,7 +145,7 @@ Quy ước:
 
 | Mục | Trạng thái | Evidence |
 |---|---|---|
-| K1 | PASS | 38/38 unit tests PASS. |
+| K1 | PASS | 40/40 unit tests PASS, gồm contract tests cho CHECK validation. |
 | K2 | PASS | Bugs punctuation/alignment review đã có regression tests. |
 | K3 | PASS | Main CI run cho `8664c8b` SUCCESS. |
 | K4 | PASS | Python compileall PASS. |
@@ -170,8 +170,4 @@ Quy ước:
 
 ## Gap cần xử lý
 
-| Ưu tiên | Gap | Hướng xử lý nhỏ nhất |
-|---|---|---|
-| P1 | `CHECK.bat` có thể báo ready khi thiếu/invalid script hoặc video reference. | Khi dependency tối thiểu sẵn sàng, chạy project CLI `--dry-run`; coi missing/invalid script/video là `[FAIL]`, vẫn không TTS, download model hay render. |
-
-Không có gap P0, không có `BLOCKED_EXTERNAL`, và chưa có lý do tạo thêm feature ngoài scope.
+Không còn gap code P0/P1/P2 sau Issue #7 và không có `BLOCKED_EXTERNAL`. Trạng thái tổng chỉ còn chờ final acceptance run trên merge commit mới nhất của `main`; chưa có lý do tạo thêm feature ngoài scope.

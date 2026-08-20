@@ -111,6 +111,8 @@ Double click `CHECK.bat`. Script chỉ kiểm tra, không render:
 - `input/script.json`;
 - số clip trong `input/videos`.
 
+CHECK còn chạy `--dry-run` để parse toàn bộ script và xác nhận từng tên video có thật. Thiếu script, không có clip, JSON lỗi hoặc video reference sai đều là `[FAIL]`; bước này không chạy TTS, không tải alignment model và không render.
+
 Sửa mọi dòng `[FAIL]` trước khi build. Nếu `.venv` thiếu, chạy `SETUP.bat`. Dòng cảnh báo model chưa cache là bình thường trước lần build đầu; CHECK không tải model lớn.
 
 ## 9. Chạy BUILD_VIDEO.bat
