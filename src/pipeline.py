@@ -6,11 +6,12 @@ import shutil
 import sys
 from pathlib import Path
 
+from .alignment import align_timeline
 from .config import AppConfig, load_config
 from .ffmpeg_utils import probe_duration, require_executable
 from .models import AutoEditorError, Script, TimelineEntry
 from .script_loader import load_script
-from .subtitles import create_cues, write_ass, write_srt
+from .subtitles import create_rolling_cues, write_ass, write_srt
 from .timing import build_timeline
 from .tts_bridge import generate_narration
 from .video_builder import (
@@ -24,10 +25,11 @@ from .video_builder import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _clean_work_directory(work_dir: Path) -> tuple[Path, Path]:
+def _clean_work_directory(work_dir: Path) -> tuple[Path, Path, Path]:
     audio_dir = work_dir / "audio"
     scenes_dir = work_dir / "scenes"
-    for directory in (audio_dir, scenes_dir):
+    alignment_dir = work_dir / "alignment"
+    for directory in (audio_dir, scenes_dir, alignment_dir):
         if directory.exists():
             shutil.rmtree(directory)
         directory.mkdir(parents=True, exist_ok=True)
@@ -35,7 +37,7 @@ def _clean_work_directory(work_dir: Path) -> tuple[Path, Path]:
         path = work_dir / filename
         if path.is_file():
             path.unlink()
-    return audio_dir, scenes_dir
+    return audio_dir, scenes_dir, alignment_dir
 
 
 def _display_dry_run(script: Script, videos_dir: Path) -> None:
@@ -65,7 +67,7 @@ def _prepare_scenes(
 
 
 def run_pipeline(script_path: Path, config_path: Path, dry_run: bool = False) -> Path | None:
-    print("[1/7] Loading project")
+    print("[1/8] Loading project")
     config = load_config(config_path)
     videos_dir = PROJECT_ROOT / "input" / "videos"
     output_dir = PROJECT_ROOT / "output"
@@ -73,7 +75,7 @@ def run_pipeline(script_path: Path, config_path: Path, dry_run: bool = False) ->
     output_dir.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    print("[2/7] Validating script and videos")
+    print("[2/8] Validating script and videos")
     script = load_script(script_path, videos_dir)
     if dry_run:
         _display_dry_run(script, videos_dir)
@@ -83,9 +85,9 @@ def run_pipeline(script_path: Path, config_path: Path, dry_run: bool = False) ->
     require_executable(config.ffprobe, "ffprobe")
     if not config.kokoro_python.is_file():
         raise AutoEditorError(f"Không tìm thấy Kokoro Python: {config.kokoro_python}")
-    audio_dir, scenes_dir = _clean_work_directory(work_dir)
+    audio_dir, scenes_dir, alignment_dir = _clean_work_directory(work_dir)
 
-    print("[3/7] Generating narration")
+    print("[3/8] Generating narration")
     generate_narration(
         script, config.kokoro_python, PROJECT_ROOT / "src" / "kokoro_worker.py",
         audio_dir, work_dir, config.audio.sample_rate,
@@ -97,25 +99,32 @@ def run_pipeline(script_path: Path, config_path: Path, dry_run: bool = False) ->
     for entry in timeline:
         print(f"       Scene {entry.scene.id:02d} ... {entry.duration:.2f} sec")
 
-    print("[4/7] Building timeline")
+    print("[4/8] Building timeline")
     total = timeline[-1].end
     print(f"       Total narration timeline: {total:.2f} sec")
 
-    print("[5/7] Preparing video scenes")
+    print("[5/8] Forced word alignment")
+    alignments = align_timeline(
+        timeline, script.language, config.alignment, alignment_dir
+    )
+    for alignment in alignments:
+        print(f"       Scene {alignment.scene_id:02d} ... {len(alignment.words)} words aligned")
+
+    print("[6/8] Preparing video scenes")
     prepared = _prepare_scenes(timeline, videos_dir, scenes_dir, config)
     joined_video = work_dir / "joined_video.mp4"
     concat_video_scenes(prepared, joined_video, config, work_dir)
     voice_path = output_dir / "voice.wav"
     concat_audio_scenes([entry.audio_path for entry in timeline], voice_path, config, work_dir)
 
-    print("[6/7] Creating subtitles")
-    cues = create_cues(timeline, config.subtitles)
+    print("[7/8] Creating rolling word subtitles")
+    cues = create_rolling_cues(alignments, timeline, config.subtitles)
     srt_path = output_dir / "subtitles.srt"
     ass_path = output_dir / "subtitles.ass"
     write_srt(cues, srt_path)
     write_ass(cues, ass_path, config.subtitles, config.video.width, config.video.height)
 
-    print("[7/7] Rendering FINAL_VIDEO.mp4")
+    print("[8/8] Rendering FINAL_VIDEO.mp4")
     final_path = output_dir / "FINAL_VIDEO.mp4"
     temporary = output_dir / "FINAL_VIDEO.building.mp4"
     if temporary.is_file():

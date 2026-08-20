@@ -8,7 +8,7 @@ YTB02 AutoEditor là công cụ local cho Windows: nhận các video clip đã h
 
 Luồng xử lý là:
 
-`script.json + video clips` → Kokoro TTS → đo WAV thật → trim/freeze video → ghép scene và narration → tạo/burn subtitle → `FINAL_VIDEO.mp4`.
+`script.json + video clips` → Kokoro TTS → đo WAV thật → WhisperX forced alignment → rolling word subtitle → trim/freeze/ghép video → burn subtitle → `FINAL_VIDEO.mp4`.
 
 Audio narration là **master timeline**. Clip dài hơn audio sẽ bị trim. Clip ngắn hơn audio sẽ giữ nguyên frame cuối bằng FFmpeg, không loop và không thay đổi tốc độ mạnh. Audio gốc của clip bị bỏ trong MVP.
 
@@ -18,16 +18,17 @@ Audio narration là **master timeline**. Clip dài hơn audio sẽ bị trim. Cl
 - Python 3.12 cho project, nên bật tùy chọn thêm Python vào PATH khi cài.
 - FFmpeg và ffprobe có trong PATH.
 - Kokoro hiện có thể dùng ở `H:\KokoroCPU\.venv\Scripts\python.exe`.
+- Project virtual environment riêng tại `.venv` cho WhisperX/PyTorch CPU.
 
 Nếu Kokoro nằm nơi khác, sửa `kokoro_python` trong `config.json`. Code không phụ thuộc bắt buộc vào ổ H và không sửa thư mục Kokoro.
 
-Để chạy test hoặc phát triển, cài dependency:
+Lần đầu tiên, double-click:
 
 ```bat
-py -3.12 -m pip install -r requirements.txt
+SETUP.bat
 ```
 
-Pipeline chính dùng gần như toàn bộ standard library. `numpy` và `soundfile` được worker chạy trong môi trường Kokoro sử dụng để ghi WAV.
+`SETUP.bat` tạo `.venv`, cài PyTorch bản CPU và WhisperX cho riêng project này. Nó không cài gì vào `H:\KokoroCPU`. Model forced-alignment chỉ tải ở lần build đầu tiên rồi được reuse từ `.cache/alignment`.
 
 ## 3. Cấu trúc folder
 
@@ -42,8 +43,10 @@ output/
   subtitles.ass        subtitle có style để burn
   FINAL_VIDEO.mp4      kết quả cuối
 work/                  WAV từng scene và media trung gian
+  alignment/           diagnostics word timing từng scene
+.cache/alignment/      model/NLTK cache, không bị xóa khi rerun
 src/                   mã nguồn Python
-tests/                 unit tests, không gọi Kokoro thật
+tests/                 unit tests dùng mock aligner, không tải model
 ```
 
 ## 4. Bỏ video vào input/videos
@@ -99,14 +102,16 @@ Dùng `"language": "vi"`. Voice mặc định là `hung_thinh`. File JSON, SRT v
 
 Double click `CHECK.bat`. Script chỉ kiểm tra, không render:
 
-- phiên bản Python;
+- project `.venv` và Python;
 - ffmpeg và ffprobe;
+- WhisperX, PyTorch, alignment engine/device/config;
+- trạng thái alignment model cache (không tự tải model);
 - đường dẫn Kokoro Python;
 - import Kokoro English và Vietnamese;
 - `input/script.json`;
 - số clip trong `input/videos`.
 
-Sửa mọi dòng `[FAIL]` trước khi build. Dòng `[WARN] input/script.json is missing` có nghĩa là bạn chưa copy script mẫu.
+Sửa mọi dòng `[FAIL]` trước khi build. Nếu `.venv` thiếu, chạy `SETUP.bat`. Dòng cảnh báo model chưa cache là bình thường trước lần build đầu; CHECK không tải model lớn.
 
 ## 9. Chạy BUILD_VIDEO.bat
 
@@ -141,6 +146,9 @@ Khi rerun, file trung gian trong `work/` được dựng lại an toàn. Clip đ
 - **ffmpeg/ffprobe not found:** cài FFmpeg và thêm folder `bin` vào PATH, sau đó mở lại terminal.
 - **Kokoro Python not found:** sửa `kokoro_python` trong `config.json`.
 - **Kokoro import failed:** kiểm tra package `kokoro`, `kokoro_vietnamese`, `numpy`, `soundfile` trong chính môi trường Kokoro.
+- **WhisperX import failed:** chạy lại `SETUP.bat`; không cài WhisperX vào Kokoro environment.
+- **Alignment model download failed:** kiểm tra internet ở lần build đầu; cache được giữ tại `.cache/alignment`.
+- **Word alignment failed:** xem file `work/alignment/scene_XXX.json`; pipeline không fallback âm thầm.
 - **input/script.json is missing:** copy `script.example.json` thành `script.json`.
 - **Không tìm thấy video:** tên trong script phải khớp chính xác file ở `input/videos`.
 - **JSON không hợp lệ:** kiểm tra dấu phẩy, dấu ngoặc kép và vị trí dòng/cột được báo.
@@ -150,16 +158,20 @@ Lỗi dự kiến được in ngắn gọn, không hiện traceback dài. Pipeli
 
 ## 12. Subtitle sync hoạt động như thế nào?
 
-Subtitle lấy **chính xác từ `scene.text`**, không chạy Whisper hoặc speech-to-text. Mốc bắt đầu/kết thúc mỗi scene lấy từ duration thật của WAV 24 kHz. Nếu text dài, hệ thống chia theo dấu câu và độ dài, giữ nguyên từ và thứ tự; thời lượng các phrase trong scene được phân bổ theo lượng ký tự.
+Narration được Kokoro tạo trước thành WAV riêng cho từng scene. WhisperX sau đó chạy **forced word alignment** giữa WAV thật và transcript đã biết từ `scene.text`. Project không chạy Whisper transcription/ASR để đoán hoặc thay nội dung. Script vẫn là canonical source of truth; aligner chỉ cung cấp timestamp.
 
-Đây là **phrase-level synchronization**, không phải phoneme/word forced alignment. Vì vậy nội dung đúng tuyệt đối theo script và timeline scene đúng theo audio, nhưng từng từ riêng lẻ không có timestamp cưỡng bức. Subtitle được burn ở bottom-center, trong safe area, chữ trắng viền đen và tối đa khoảng hai dòng với text thông thường.
+Subtitle dùng rolling word reveal: một canonical word chỉ xuất hiện khi playback đạt `word.start` đã align. Future words không được hiển thị sớm. Khi caption dài, project mở window mới, giữ bottom-center, safe area, chữ trắng viền đen và tối đa hai dòng. Cả English và Vietnamese dùng model mapping mặc định của WhisperX, có thể override trong `config.json`.
+
+Đây là forced alignment có validation, không được quảng cáo là đồng bộ hoàn hảo trong mọi audio. Nếu thiếu/thừa word, sai thứ tự, thiếu timestamp hoặc vượt duration, pipeline dừng và ghi chi tiết tại `work/alignment/scene_XXX.json`. Không có silent fallback về cách chia duration theo số chữ/ký tự; `allow_approximate_fallback` mặc định là `false`.
+
+Lần đầu build có thể chậm và cần internet để tải alignment model. Các lần sau reuse `.cache/alignment`. CPU được hỗ trợ và là mode bắt buộc hiện tại; không cần NVIDIA/CUDA.
 
 ## Kiểm thử dành cho developer
 
 Không cần internet hoặc Kokoro thật để chạy unit tests:
 
 ```bat
-py -3.12 -m unittest discover -s tests -v
+.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Các test bao phủ JSON hợp lệ/không hợp lệ, ID trùng/không liên tục, video thiếu, timeline cộng dồn, định dạng SRT, bảo toàn nội dung và thứ tự subtitle.
+Các test không tải model thật. Chúng bao phủ validation script/timeline, canonical word mapping, punctuation/Unicode Vietnamese, missing/extra words, diagnostics, global offsets, rolling windows, SRT/ASS ordering và invariant không hiển thị future word.

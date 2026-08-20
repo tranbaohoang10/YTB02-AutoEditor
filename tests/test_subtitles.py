@@ -1,16 +1,38 @@
-import re
+import tempfile
 import unittest
 from pathlib import Path
 
 from src.config import SubtitleConfig
-from src.models import Scene, TimelineEntry
-from src.subtitles import create_cues, format_srt_timestamp
+from src.models import Scene, SceneAlignment, TimelineEntry, WordTiming
+from src.subtitles import (
+    create_rolling_cues,
+    format_ass_timestamp,
+    format_srt_timestamp,
+    write_ass,
+    write_srt,
+)
 
 
 CONFIG = SubtitleConfig(
     font="Arial", font_size=52, margin_bottom=70, outline=3,
-    max_chars_per_line=18, max_lines=2,
+    max_chars_per_line=18, max_lines=2, max_words_per_window=4,
 )
+
+
+def sample_scene() -> tuple[tuple[TimelineEntry, ...], tuple[SceneAlignment, ...]]:
+    text = "Before sunrise in London"
+    timeline = (
+        TimelineEntry(Scene(1, "a.mp4", text), Path("a.wav"), 1.5, 0.0, 1.5),
+    )
+    alignment = (
+        SceneAlignment(1, "en", (
+            WordTiming("Before", 0.0, 0.25),
+            WordTiming("sunrise", 0.3, 0.65),
+            WordTiming("in", 0.7, 0.85),
+            WordTiming("London", 0.9, 1.2),
+        )),
+    )
+    return timeline, alignment
 
 
 class SubtitleTests(unittest.TestCase):
@@ -18,27 +40,64 @@ class SubtitleTests(unittest.TestCase):
         self.assertEqual(format_srt_timestamp(0), "00:00:00,000")
         self.assertEqual(format_srt_timestamp(3723.456), "01:02:03,456")
 
-    def _sample_cues(self):
-        first = "Trước khi mặt trời mọc tại Luân Đôn, Ngân hàng Anh đã chuẩn bị."
-        second = "Không thêm hoặc bớt từ."
-        timeline = (
-            TimelineEntry(Scene(1, "a.mp4", first), Path("a.wav"), 4.0, 0.0, 4.0),
-            TimelineEntry(Scene(2, "b.mp4", second), Path("b.wav"), 2.0, 4.0, 6.0),
+    def test_serialized_timestamp_never_rounds_early(self) -> None:
+        self.assertEqual(format_srt_timestamp(0.3004), "00:00:00,301")
+        self.assertEqual(format_ass_timestamp(0.304), "0:00:00.31")
+
+    def test_future_word_invariant_at_half_second(self) -> None:
+        timeline, alignments = sample_scene()
+        cues = create_rolling_cues(alignments, timeline, CONFIG)
+        visible = next(cue.text.replace("\n", " ") for cue in cues if cue.start <= 0.5 < cue.end)
+        self.assertEqual(visible, "Before sunrise")
+        self.assertNotIn(" in", visible)
+        self.assertNotIn("London", visible)
+
+    def test_every_event_contains_only_started_words(self) -> None:
+        timeline, alignments = sample_scene()
+        cues = create_rolling_cues(alignments, timeline, CONFIG)
+        starts = {word.word: word.start for word in alignments[0].words}
+        for cue in cues:
+            for word in cue.text.replace("\n", " ").split():
+                self.assertLessEqual(starts[word], cue.start)
+
+    def test_window_rollover_never_reveals_future_word(self) -> None:
+        timeline, alignments = sample_scene()
+        config = SubtitleConfig("Arial", 52, 70, 3, 42, 2, 2)
+        cues = create_rolling_cues(alignments, timeline, config)
+        at_075 = next(cue.text.replace("\n", " ") for cue in cues if cue.start <= 0.75 < cue.end)
+        self.assertEqual(at_075, "in")
+        self.assertNotIn("London", at_075)
+
+    def test_max_lines_formatting(self) -> None:
+        timeline, alignments = sample_scene()
+        cues = create_rolling_cues(alignments, timeline, CONFIG)
+        self.assertTrue(all(len(cue.text.splitlines()) <= 2 for cue in cues))
+
+    def test_global_offset_for_second_scene(self) -> None:
+        scene = Scene(2, "b.mp4", "Xin chào")
+        timeline = (TimelineEntry(scene, Path("b.wav"), 1.5, 4.5, 6.0),)
+        alignments = (
+            SceneAlignment(2, "vi", (
+                WordTiming("Xin", 0.3, 0.5), WordTiming("chào", 0.7, 1.0),
+            )),
         )
-        return first, second, create_cues(timeline, CONFIG)
+        cues = create_rolling_cues(alignments, timeline, CONFIG)
+        self.assertAlmostEqual(cues[0].start, 4.8)
+        self.assertAlmostEqual(cues[1].start, 5.2)
 
-    def test_text_preservation(self) -> None:
-        first, second, cues = self._sample_cues()
-        combined = " ".join(cue.text.replace("\n", " ") for cue in cues)
-        expected = f"{first} {second}"
-        self.assertEqual(re.sub(r"\s+", " ", combined), expected)
-
-    def test_subtitle_ordering(self) -> None:
-        _, _, cues = self._sample_cues()
+    def test_srt_and_ass_event_ordering(self) -> None:
+        timeline, alignments = sample_scene()
+        cues = create_rolling_cues(alignments, timeline, CONFIG)
         self.assertEqual([cue.index for cue in cues], list(range(1, len(cues) + 1)))
-        self.assertEqual(cues[0].start, 0.0)
-        self.assertEqual(cues[-1].end, 6.0)
-        self.assertTrue(all(a.end <= b.start for a, b in zip(cues, cues[1:])))
+        self.assertTrue(all(left.end <= right.start for left, right in zip(cues, cues[1:])))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_srt(cues, root / "test.srt")
+            write_ass(cues, root / "test.ass", CONFIG, 1920, 1080)
+            srt = (root / "test.srt").read_text(encoding="utf-8")
+            ass = (root / "test.ass").read_text(encoding="utf-8-sig")
+        self.assertIn("Before sunrise", srt)
+        self.assertIn("Dialogue: 0,0:00:00.30,0:00:00.70", ass)
 
 
 if __name__ == "__main__":
