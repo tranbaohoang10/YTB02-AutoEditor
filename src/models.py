@@ -37,5 +37,23 @@ class SubtitleCue:
     text: str
 
 
+@dataclass(frozen=True)
+class WordTiming:
+    """One canonical display token and its scene-relative or global timing."""
+
+    word: str
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
+class SceneAlignment:
+    """Validated scene-relative word timings from forced alignment."""
+
+    scene_id: int
+    language: str
+    words: tuple[WordTiming, ...]
+
+
 class AutoEditorError(Exception):
     """Expected, user-facing pipeline error."""

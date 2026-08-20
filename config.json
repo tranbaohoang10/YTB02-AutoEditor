@@ -15,12 +15,22 @@
     "aac_bitrate": "192k",
     "gap_ms": 0
   },
+  "alignment": {
+    "engine": "whisperx",
+    "device": "cpu",
+    "allow_approximate_fallback": false,
+    "model_en": null,
+    "model_vi": null,
+    "cache_dir": ".cache/alignment",
+    "duration_tolerance": 0.25
+  },
   "subtitles": {
     "font": "Arial",
     "font_size": 52,
     "margin_bottom": 70,
     "outline": 3,
     "max_chars_per_line": 42,
-    "max_lines": 2
+    "max_lines": 2,
+    "max_words_per_window": 6
   }
 }

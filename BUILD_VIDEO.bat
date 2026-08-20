@@ -3,20 +3,18 @@ setlocal
 chcp 65001 >nul
 cd /d "%~dp0"
 
-echo Checking Python 3.12...
-py -3.12 --version >nul 2>&1
-if not errorlevel 1 (
-  set "PROJECT_PYTHON=py -3.12"
-  goto :python_ok
-)
-python --version >nul 2>&1
-if errorlevel 1 (
-  echo ERROR: Python 3.12 was not found. Install Python 3.12 and try again.
+set "PROJECT_PYTHON=.venv\Scripts\python.exe"
+if not exist "%PROJECT_PYTHON%" (
+  echo ERROR: Project virtual environment was not found.
+  echo Run SETUP.bat once, then run CHECK.bat.
   goto :failed
 )
-set "PROJECT_PYTHON=python"
-
-:python_ok
+"%PROJECT_PYTHON%" -c "import whisperx" >nul 2>&1
+if errorlevel 1 (
+  echo ERROR: WhisperX is not installed in the project environment.
+  echo Run SETUP.bat again.
+  goto :failed
+)
 where ffmpeg >nul 2>&1
 if errorlevel 1 (
   echo ERROR: ffmpeg was not found in PATH.
@@ -39,7 +37,7 @@ if not exist "%KOKORO_PY%" (
   goto :failed
 )
 
-%PROJECT_PYTHON% -m src.pipeline --script input\script.json
+"%PROJECT_PYTHON%" -m src.pipeline --script input\script.json
 if errorlevel 1 goto :failed
 
 echo.

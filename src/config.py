@@ -33,6 +33,18 @@ class SubtitleConfig:
     outline: int
     max_chars_per_line: int
     max_lines: int
+    max_words_per_window: int = 6
+
+
+@dataclass(frozen=True)
+class AlignmentConfig:
+    engine: str
+    device: str
+    allow_approximate_fallback: bool
+    model_en: str | None
+    model_vi: str | None
+    cache_dir: Path
+    duration_tolerance: float
 
 
 @dataclass(frozen=True)
@@ -43,6 +55,7 @@ class AppConfig:
     video: VideoConfig
     audio: AudioConfig
     subtitles: SubtitleConfig
+    alignment: AlignmentConfig
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -63,6 +76,10 @@ def load_config(path: Path) -> AppConfig:
         video = _section(data, "video")
         audio = _section(data, "audio")
         subtitles = _section(data, "subtitles")
+        alignment = _section(data, "alignment")
+        fallback_value = alignment["allow_approximate_fallback"]
+        if not isinstance(fallback_value, bool):
+            raise TypeError("alignment.allow_approximate_fallback phải là boolean")
         kokoro_python = Path(str(data["kokoro_python"]))
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
@@ -86,6 +103,18 @@ def load_config(path: Path) -> AppConfig:
                 outline=int(subtitles["outline"]),
                 max_chars_per_line=int(subtitles["max_chars_per_line"]),
                 max_lines=int(subtitles["max_lines"]),
+                max_words_per_window=int(subtitles.get("max_words_per_window", 6)),
+            ),
+            alignment=AlignmentConfig(
+                engine=str(alignment["engine"]),
+                device=str(alignment["device"]),
+                allow_approximate_fallback=fallback_value,
+                model_en=(str(alignment["model_en"]) if alignment.get("model_en") else None),
+                model_vi=(str(alignment["model_vi"]) if alignment.get("model_vi") else None),
+                cache_dir=(path.parent / str(alignment["cache_dir"])).resolve()
+                if not Path(str(alignment["cache_dir"])).is_absolute()
+                else Path(str(alignment["cache_dir"])),
+                duration_tolerance=float(alignment.get("duration_tolerance", 0.25)),
             ),
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -94,4 +123,12 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("Kích thước và FPS trong config phải lớn hơn 0.")
     if result.audio.sample_rate <= 0 or result.audio.gap_ms < 0:
         raise AutoEditorError("sample_rate phải > 0 và gap_ms phải >= 0.")
+    if result.alignment.engine != "whisperx":
+        raise AutoEditorError("alignment.engine hiện chỉ hỗ trợ 'whisperx'.")
+    if result.alignment.device != "cpu":
+        raise AutoEditorError("MVP alignment chỉ hỗ trợ device='cpu'.")
+    if result.alignment.duration_tolerance < 0:
+        raise AutoEditorError("alignment.duration_tolerance không được âm.")
+    if result.subtitles.max_lines < 1 or result.subtitles.max_words_per_window < 1:
+        raise AutoEditorError("Subtitle max_lines và max_words_per_window phải >= 1.")
     return result

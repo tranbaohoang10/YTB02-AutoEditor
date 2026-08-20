@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import re
+import math
 import textwrap
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from .config import SubtitleConfig
-from .models import SubtitleCue, TimelineEntry
-
-
-_BOUNDARY = re.compile(r"(?<=[.!?;:…])\s+")
+from .models import AutoEditorError, SceneAlignment, SubtitleCue, TimelineEntry, WordTiming
+from .alignment import to_global_words
 
 
 def format_srt_timestamp(seconds: float) -> str:
-    milliseconds = max(0, round(seconds * 1000))
+    # Ceiling prevents serialization precision from revealing a word early.
+    milliseconds = max(0, math.ceil(seconds * 1000 - 1e-9))
     hours, milliseconds = divmod(milliseconds, 3_600_000)
     minutes, milliseconds = divmod(milliseconds, 60_000)
     secs, milliseconds = divmod(milliseconds, 1000)
@@ -21,85 +20,102 @@ def format_srt_timestamp(seconds: float) -> str:
 
 
 def format_ass_timestamp(seconds: float) -> str:
-    centiseconds = max(0, round(seconds * 100))
+    # ASS has centisecond precision: delay by <10ms rather than round backwards.
+    centiseconds = max(0, math.ceil(seconds * 100 - 1e-9))
     hours, centiseconds = divmod(centiseconds, 360_000)
     minutes, centiseconds = divmod(centiseconds, 6_000)
     secs, centiseconds = divmod(centiseconds, 100)
     return f"{hours}:{minutes:02d}:{secs:02d}.{centiseconds:02d}"
 
 
-def _split_long_phrase(text: str, limit: int) -> list[str]:
-    words = text.split()
-    chunks: list[str] = []
-    current: list[str] = []
-    max_chars = max(1, limit * 2)
-    for word in words:
-        candidate = " ".join((*current, word))
-        if current and len(candidate) > max_chars:
-            chunks.append(" ".join(current))
-            current = [word]
-        else:
-            current.append(word)
-    if current:
-        chunks.append(" ".join(current))
-    return chunks
-
-
-def split_subtitle_text(text: str, max_chars_per_line: int, max_lines: int) -> list[str]:
-    limit = max(1, max_chars_per_line * max_lines)
-    phrases = [part.strip() for part in _BOUNDARY.split(text.strip()) if part.strip()]
-    chunks: list[str] = []
-    current = ""
-    for phrase in phrases:
-        for part in _split_long_phrase(phrase, max_chars_per_line):
-            candidate = f"{current} {part}".strip()
-            if current and len(candidate) > limit:
-                chunks.append(current)
-                current = part
-            else:
-                current = candidate
-    if current:
-        chunks.append(current)
-    return chunks or [text.strip()]
-
-
 def _wrap(text: str, width: int, max_lines: int) -> str:
     lines = textwrap.wrap(
         text, width=max(1, width), break_long_words=False, break_on_hyphens=False,
     )
-    if len(lines) <= max_lines:
-        return "\n".join(lines)
-    # Chunking normally prevents this; preserve all text if a single very long word exists.
     return "\n".join(lines)
 
 
-def create_cues(
-    timeline: Iterable[TimelineEntry], config: SubtitleConfig
-) -> tuple[SubtitleCue, ...]:
+def _fits_window(words: Sequence[WordTiming], config: SubtitleConfig) -> bool:
+    if len(words) > config.max_words_per_window:
+        return False
+    wrapped = _wrap(
+        " ".join(word.word for word in words), config.max_chars_per_line, config.max_lines
+    )
+    return len(wrapped.splitlines()) <= config.max_lines
+
+
+def _caption_windows(
+    words: Sequence[WordTiming], config: SubtitleConfig
+) -> list[list[WordTiming]]:
+    windows: list[list[WordTiming]] = []
+    current: list[WordTiming] = []
+    for word in words:
+        candidate = [*current, word]
+        if current and not _fits_window(candidate, config):
+            windows.append(current)
+            current = [word]
+        else:
+            current = candidate
+    if current:
+        windows.append(current)
+    return windows
+
+
+def _window_cues(
+    window: Sequence[WordTiming],
+    window_end: float,
+    config: SubtitleConfig,
+) -> list[SubtitleCue]:
     cues: list[SubtitleCue] = []
-    index = 1
-    for entry in timeline:
-        chunks = split_subtitle_text(
-            entry.scene.text, config.max_chars_per_line, config.max_lines
-        )
-        weights = [max(1, len(re.sub(r"\s+", "", chunk))) for chunk in chunks]
-        total_weight = sum(weights)
-        cursor = entry.start
-        for position, (chunk, weight) in enumerate(zip(chunks, weights)):
-            end = (
-                entry.end
-                if position == len(chunks) - 1
-                else cursor + entry.duration * weight / total_weight
-            )
+    position = 0
+    while position < len(window):
+        event_start = window[position].start
+        reveal_end = position + 1
+        while reveal_end < len(window) and window[reveal_end].start == event_start:
+            reveal_end += 1
+        event_end = window[reveal_end].start if reveal_end < len(window) else window_end
+        if event_end > event_start:
+            text = " ".join(word.word for word in window[:reveal_end])
             cues.append(
                 SubtitleCue(
-                    index=index, start=cursor, end=end,
-                    text=_wrap(chunk, config.max_chars_per_line, config.max_lines),
+                    index=0,
+                    start=event_start,
+                    end=event_end,
+                    text=_wrap(text, config.max_chars_per_line, config.max_lines),
                 )
             )
-            cursor = end
-            index += 1
-    return tuple(cues)
+        position = reveal_end
+    return cues
+
+
+def create_rolling_cues(
+    alignments: Sequence[SceneAlignment],
+    timeline: Sequence[TimelineEntry],
+    config: SubtitleConfig,
+) -> tuple[SubtitleCue, ...]:
+    """Create rolling events solely from validated forced-alignment timestamps."""
+    by_scene = {alignment.scene_id: alignment for alignment in alignments}
+    cues: list[SubtitleCue] = []
+    for entry in timeline:
+        alignment = by_scene.get(entry.scene.id)
+        if alignment is None:
+            raise AutoEditorError(f"Thiếu word alignment cho scene {entry.scene.id:02d}.")
+        global_words = to_global_words(alignment, entry.start)
+        windows = _caption_windows(global_words, config)
+        for window_index, window in enumerate(windows):
+            window_end = (
+                windows[window_index + 1][0].start
+                if window_index + 1 < len(windows)
+                else entry.end
+            )
+            cues.extend(_window_cues(window, window_end, config))
+
+    ordered: list[SubtitleCue] = []
+    for index, cue in enumerate(cues, 1):
+        if ordered and cue.start < ordered[-1].end:
+            raise AutoEditorError("Rolling subtitle events bị overlap hoặc sai thứ tự.")
+        ordered.append(SubtitleCue(index, cue.start, cue.end, cue.text))
+    return tuple(ordered)
 
 
 def write_srt(cues: Iterable[SubtitleCue], path: Path) -> None:

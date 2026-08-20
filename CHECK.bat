@@ -3,26 +3,42 @@ setlocal EnableDelayedExpansion
 chcp 65001 >nul
 cd /d "%~dp0"
 set "CHECK_FAILED=0"
+set "PROJECT_PY=.venv\Scripts\python.exe"
 
 echo ========================================
 echo YTB02 AutoEditor - Environment Check
 echo ========================================
 
-py -3.12 --version >nul 2>&1
-if not errorlevel 1 (
-  for /f "delims=" %%I in ('py -3.12 --version 2^>^&1') do echo [OK] %%I
+if exist "%PROJECT_PY%" (
+  for /f "delims=" %%I in ('"%PROJECT_PY%" --version 2^>^&1') do echo [OK] Project %%I: %PROJECT_PY%
 ) else (
-  python --version >nul 2>&1
-  if errorlevel 1 (
-    echo [FAIL] Python 3.12 not found
-    set "CHECK_FAILED=1"
-  ) else (
-    for /f "delims=" %%I in ('python --version 2^>^&1') do echo [WARN] %%I - Python 3.12 is recommended
-  )
+  echo [FAIL] Project virtual environment is missing.
+  echo        Run SETUP.bat once before CHECK or BUILD.
+  set "CHECK_FAILED=1"
 )
 
 where ffmpeg >nul 2>&1 && (echo [OK] ffmpeg) || (echo [FAIL] ffmpeg not found & set "CHECK_FAILED=1")
 where ffprobe >nul 2>&1 && (echo [OK] ffprobe) || (echo [FAIL] ffprobe not found & set "CHECK_FAILED=1")
+
+if exist "%PROJECT_PY%" (
+  "%PROJECT_PY%" -c "import whisperx" >nul 2>&1 && (echo [OK] WhisperX alignment package) || (echo [FAIL] WhisperX import - run SETUP.bat & set "CHECK_FAILED=1")
+  "%PROJECT_PY%" -c "import torch; assert not torch.cuda.is_available() or True; print(torch.__version__)" >nul 2>&1 && (echo [OK] PyTorch available) || (echo [FAIL] PyTorch import & set "CHECK_FAILED=1")
+)
+
+for /f "usebackq tokens=1-4 delims=|" %%A in (`powershell -NoProfile -Command "$a=(Get-Content -Raw -LiteralPath 'config.json'|ConvertFrom-Json).alignment; Write-Output ($a.engine+'|'+$a.device+'|'+$a.allow_approximate_fallback+'|'+$a.cache_dir)"`) do (
+  set "ALIGN_ENGINE=%%A"
+  set "ALIGN_DEVICE=%%B"
+  set "ALIGN_FALLBACK=%%C"
+  set "ALIGN_CACHE=%%D"
+)
+if /I "!ALIGN_ENGINE!"=="whisperx" (echo [OK] Alignment engine: WhisperX) else (echo [FAIL] alignment.engine must be whisperx & set "CHECK_FAILED=1")
+if /I "!ALIGN_DEVICE!"=="cpu" (echo [OK] Alignment device: CPU) else (echo [FAIL] alignment.device must be cpu & set "CHECK_FAILED=1")
+if /I "!ALIGN_FALLBACK!"=="False" (echo [OK] Approximate fallback: OFF) else (echo [FAIL] allow_approximate_fallback must be false & set "CHECK_FAILED=1")
+if exist "!ALIGN_CACHE!" (
+  dir /b /a "!ALIGN_CACHE!" >nul 2>&1 && (echo [OK] Alignment model cache exists) || (echo [WARN] Alignment model will be downloaded on first build.)
+) else (
+  echo [WARN] Alignment model will be downloaded on first build.
+)
 
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "(Get-Content -Raw -LiteralPath 'config.json' | ConvertFrom-Json).kokoro_python"`) do set "KOKORO_PY=%%I"
 if exist "%KOKORO_PY%" (
@@ -35,7 +51,7 @@ if exist "%KOKORO_PY%" (
 )
 
 if exist "input\script.json" (echo [OK] input\script.json) else (echo [WARN] input\script.json is missing)
-for /f %%I in ('dir /b /a-d "input\videos" 2^>nul ^| find /v /c ""') do set "CLIP_COUNT=%%I"
+for /f %%I in ('dir /b /a-d "input\videos" 2^>nul ^| findstr /v /i /x ".gitkeep" ^| find /v /c ""') do set "CLIP_COUNT=%%I"
 echo [INFO] Video clips in input\videos: !CLIP_COUNT!
 
 echo ========================================

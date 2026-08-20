@@ -12,6 +12,14 @@
 - Keep the architecture lightweight, local, and Windows-first using Python 3.12.
 - Do not modify, delete, or write into `H:\KokoroCPU`; invoke its Python only.
 - Keep intermediate artifacts in `work/` and never delete user input clips.
+- Canonical script text is always the source of truth.
+- Subtitle timing must use real word-level forced alignment on the generated WAV.
+- Future words must never appear before their aligned start timestamp.
+- Never replace canonical text with an ASR/Whisper transcription.
+- Never silently fall back to proportional character-count or word-count timing.
+- Word alignment failure must be explicit and must leave scene diagnostics.
+- Alignment models must be cached outside `work/` and loaded once per language/run.
+- Alignment dependencies belong to the project `.venv`, never the Kokoro environment.
 
 ## Required Git and GitHub workflow
 
