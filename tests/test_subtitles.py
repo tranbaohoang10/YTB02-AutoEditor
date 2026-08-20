@@ -68,6 +68,24 @@ class SubtitleTests(unittest.TestCase):
         self.assertEqual(at_075, "in")
         self.assertNotIn("London", at_075)
 
+    def test_attached_punctuation_does_not_reveal_future_spoken_word(self) -> None:
+        text = "Britain was trapped — and pressure increased."
+        timeline = (TimelineEntry(Scene(1, "a.mp4", text), Path("a.wav"), 2.0, 0.0, 2.0),)
+        alignments = (
+            SceneAlignment(1, "en", (
+                WordTiming("Britain", 0.0, 0.2),
+                WordTiming("was", 0.3, 0.45),
+                WordTiming("trapped —", 0.5, 0.8),
+                WordTiming("and", 1.0, 1.15),
+                WordTiming("pressure", 1.2, 1.5),
+                WordTiming("increased.", 1.55, 1.8),
+            )),
+        )
+        cues = create_rolling_cues(alignments, timeline, CONFIG)
+        visible = next(cue.text.replace("\n", " ") for cue in cues if cue.start <= 0.9 < cue.end)
+        self.assertIn("trapped —", visible)
+        self.assertNotIn(" and", visible)
+
     def test_max_lines_formatting(self) -> None:
         timeline, alignments = sample_scene()
         cues = create_rolling_cues(alignments, timeline, CONFIG)

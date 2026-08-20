@@ -38,6 +38,10 @@ echo Verifying installed dependencies...
 ".venv\Scripts\python.exe" -m pip check
 if errorlevel 1 goto :failed
 
+echo Verifying WhisperX runtime imports without loading alignment models...
+".venv\Scripts\python.exe" -c "import whisperx; import torch; import torchaudio; print('WhisperX OK')"
+if errorlevel 1 goto :failed
+
 echo.
 echo ========================================
 echo SETUP COMPLETE

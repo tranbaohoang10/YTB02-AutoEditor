@@ -1,13 +1,17 @@
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.alignment import (
     align_timeline,
     canonical_words,
     to_global_words,
     validate_and_map_words,
+    WhisperXAlignmentEngine,
 )
 from src.config import AlignmentConfig
 from src.models import AutoEditorError, Scene, SceneAlignment, TimelineEntry, WordTiming
@@ -40,6 +44,43 @@ class FakeEngine:
 
 
 class AlignmentTests(unittest.TestCase):
+    def test_whisperx_386_public_api_contract_without_model_download(self) -> None:
+        calls: dict[str, object] = {}
+        loads: list[dict[str, object]] = []
+        fake = types.ModuleType("whisperx")
+
+        def load_align_model(**kwargs):
+            loads.append(kwargs)
+            return "model", {"language": kwargs["language_code"]}
+
+        def load_audio(path):
+            calls["audio"] = path
+            return "audio"
+
+        def align(transcript, model, metadata, audio, device, **kwargs):
+            calls["align"] = {
+                "transcript": transcript, "model": model, "metadata": metadata,
+                "audio": audio, "device": device, **kwargs,
+            }
+            return {"segments": [], "word_segments": raw_words()}
+
+        fake.load_align_model = load_align_model
+        fake.load_audio = load_audio
+        fake.align = align
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {"whisperx": fake}):
+            engine = WhisperXAlignmentEngine("en", config(Path(directory)))
+            result = engine.align(Path("scene.wav"), "Before sunrise in London", 1.5)
+            WhisperXAlignmentEngine("vi", config(Path(directory)))
+        self.assertEqual(result, raw_words())
+        self.assertEqual([item["language_code"] for item in loads], ["en", "vi"])
+        self.assertTrue(all(item["model_name"] is None for item in loads))
+        self.assertEqual(calls["align"]["interpolate_method"], "ignore")
+        self.assertFalse(calls["align"]["return_char_alignments"])
+        self.assertEqual(
+            calls["align"]["transcript"],
+            [{"text": "Before sunrise in London", "start": 0.0, "end": 1.5}],
+        )
+
     def test_canonical_words_preserved_with_punctuation(self) -> None:
         mapped = validate_and_map_words("Before sunrise in London.", raw_words(), 1.5, 0.25)
         self.assertEqual([word.word for word in mapped], ["Before", "sunrise", "in", "London."])
@@ -125,6 +166,45 @@ class AlignmentTests(unittest.TestCase):
 
     def test_canonical_tokenizer_does_not_rewrite_text(self) -> None:
         self.assertEqual(canonical_words("Xin chào, Việt Nam!"), ("Xin", "chào,", "Việt", "Nam!"))
+
+    def test_standalone_em_dash_attaches_to_previous_word(self) -> None:
+        text = "Britain was trapped — and pressure increased."
+        raw = [
+            {"word": word, "start": index * 0.2, "end": index * 0.2 + 0.15}
+            for index, word in enumerate(("Britain", "was", "trapped", "and", "pressure", "increased"))
+        ]
+        mapped = validate_and_map_words(text, raw, 2.0, 0.1)
+        self.assertEqual(
+            [word.word for word in mapped],
+            ["Britain", "was", "trapped —", "and", "pressure", "increased."],
+        )
+
+    def test_standalone_arrow_attaches_without_fake_timing(self) -> None:
+        text = "The rate moved from 10% → 12%."
+        raw = [
+            {"word": "The", "start": 0.0, "end": 0.15},
+            {"word": "rate", "start": 0.2, "end": 0.35},
+            {"word": "moved", "start": 0.4, "end": 0.55},
+            {"word": "from", "start": 0.6, "end": 0.75},
+            {"word": "10", "start": 0.8, "end": 0.95},
+            {"word": "12", "start": 1.05, "end": 1.2},
+        ]
+        mapped = validate_and_map_words(text, raw, 1.3, 0.1)
+        self.assertEqual(
+            [word.word for word in mapped],
+            ["The", "rate", "moved", "from", "10% →", "12%."],
+        )
+
+    def test_colon_and_ellipsis_are_preserved(self) -> None:
+        self.assertEqual(canonical_words("London: the pound fell."), ("London:", "the", "pound", "fell."))
+        self.assertEqual(canonical_words("Wait ... then continue."), ("Wait ...", "then", "continue."))
+
+    def test_vietnamese_punctuation_and_multiple_spaces(self) -> None:
+        text = "Trước   bình minh   —   đồng bảng chịu áp lực."
+        self.assertEqual(
+            canonical_words(text),
+            ("Trước", "bình", "minh —", "đồng", "bảng", "chịu", "áp", "lực."),
+        )
 
 
 if __name__ == "__main__":

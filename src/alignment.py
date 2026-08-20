@@ -26,8 +26,30 @@ class AlignmentEngine(Protocol):
 
 
 def canonical_words(text: str) -> tuple[str, ...]:
-    """Return canonical display tokens without changing spelling or punctuation."""
-    return tuple(_TOKEN_PATTERN.findall(text))
+    """Return alignable display tokens while preserving standalone punctuation.
+
+    Punctuation-only whitespace tokens are not spoken words. They attach to the
+    previous spoken token, or to the next token when they occur at the start.
+    """
+    raw_tokens = _TOKEN_PATTERN.findall(text)
+    display_tokens: list[str] = []
+    leading_punctuation: list[str] = []
+    for token in raw_tokens:
+        if _normalized_word(token):
+            if leading_punctuation:
+                token = " ".join((*leading_punctuation, token))
+                leading_punctuation.clear()
+            display_tokens.append(token)
+        elif display_tokens:
+            display_tokens[-1] = f"{display_tokens[-1]} {token}"
+        else:
+            leading_punctuation.append(token)
+    if leading_punctuation:
+        if display_tokens:
+            display_tokens[-1] = f"{display_tokens[-1]} {' '.join(leading_punctuation)}"
+        else:
+            raise AutoEditorError("Canonical transcript chỉ chứa punctuation, không có spoken word.")
+    return tuple(display_tokens)
 
 
 def _normalized_word(word: str) -> str:
@@ -74,10 +96,8 @@ def validate_and_map_words(
 
     for canonical_word in canonical:
         target = _normalized_word(canonical_word)
-        if not target:
-            raise AutoEditorError(
-                f"Canonical token {canonical_word!r} không có ký tự có thể forced-align."
-            )
+        if not target:  # Defensive: canonical_words() already attaches punctuation-only tokens.
+            raise AutoEditorError(f"Canonical token {canonical_word!r} không thể forced-align.")
         combined = ""
         consumed: list[tuple[str, str, float | None, float | None]] = []
         while raw_index < len(raw) and len(combined) < len(target):
@@ -121,6 +141,13 @@ def to_global_words(alignment: SceneAlignment, offset: float) -> tuple[WordTimin
         WordTiming(word.word, word.start + offset, word.end + offset)
         for word in alignment.words
     )
+
+
+def _canonical_count(text: str) -> int:
+    try:
+        return len(canonical_words(text))
+    except AutoEditorError:
+        return 0
 
 
 class WhisperXAlignmentEngine:
@@ -188,7 +215,7 @@ def _write_diagnostics(
         "canonical_text": entry.scene.text,
         "audio_duration": round(entry.duration, 6),
         "aligned_count": len(words),
-        "canonical_count": len(canonical_words(entry.scene.text)),
+        "canonical_count": _canonical_count(entry.scene.text),
         "words": [
             {"word": word.word, "start": round(word.start, 6), "end": round(word.end, 6)}
             for word in words
@@ -245,7 +272,7 @@ def align_timeline(
                 and isinstance(item.get("start"), Real)
                 and isinstance(item.get("end"), Real)
             )
-            canonical_count = len(canonical_words(entry.scene.text))
+            canonical_count = _canonical_count(entry.scene.text)
             raise AutoEditorError(
                 f"Word alignment failed for scene {entry.scene.id:02d}. "
                 f"Aligned {aligned_count}/{canonical_count} canonical words. "
