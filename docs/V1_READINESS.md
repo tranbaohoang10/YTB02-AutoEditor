@@ -1,8 +1,10 @@
 # YTB02 AutoEditor V1 readiness
 
-Ngày audit: 2026-08-20  
-Baseline đã merge: `8664c8b4afb05966817929e6a9708ab99a1278b1`  
-Trạng thái tổng: **NEEDS_WORK** — không còn code gap sau Issue #7; chờ final acceptance trên `main`.
+Ngày audit: 2026-08-20
+
+Baseline code đã merge và final-verified: `9fed9a7439ee78b0b02aad71ce3d13cdce3ad539`
+
+Trạng thái tổng: **PASS — V1 READY**
 
 Quy ước:
 
@@ -147,7 +149,7 @@ Quy ước:
 |---|---|---|
 | K1 | PASS | 40/40 unit tests PASS, gồm contract tests cho CHECK validation. |
 | K2 | PASS | Bugs punctuation/alignment review đã có regression tests. |
-| K3 | PASS | Main CI run cho `8664c8b` SUCCESS. |
+| K3 | PASS | Main CI run cho `9fed9a7` SUCCESS. |
 | K4 | PASS | Python compileall PASS. |
 | K5 | PASS | `git diff --check` PASS. |
 | K6 | PASS | Real English alignment smoke PASS. |
@@ -170,4 +172,27 @@ Quy ước:
 
 ## Gap cần xử lý
 
-Không còn gap code P0/P1/P2 sau Issue #7 và không có `BLOCKED_EXTERNAL`. Trạng thái tổng chỉ còn chờ final acceptance run trên merge commit mới nhất của `main`; chưa có lý do tạo thêm feature ngoài scope.
+Không còn gap code P0/P1/P2 sau Issue #7, không có `BLOCKED_EXTERNAL`, không có Issue/PR code mở và chưa có lý do tạo thêm feature ngoài scope.
+
+## Final acceptance trên Windows
+
+Final acceptance được chạy lại từ đầu trên `main` commit `9fed9a7` ngày 2026-08-20:
+
+- 40/40 unit tests, compileall và `pip check`: PASS.
+- `CHECK.bat` với two-scene input hợp lệ: PASS, exit 0, dry-run validate script/video references.
+- Kokoro English `am_eric`: tạo WAV thật 3.925 giây.
+- English forced alignment: 10/10 canonical words; real no-future-word: PASS.
+- Kokoro Vietnamese `hung_thinh`: tạo WAV thật 3.150 giây.
+- Vietnamese forced alignment: 12/12 canonical words; Unicode/no-future-word: PASS.
+- `BUILD_VIDEO.bat` two-scene end-to-end: PASS, exit 0.
+- Freeze: clip 2.000 giây → prepared 3.933 giây, target narration 3.925 giây.
+- Trim: clip 8.000 giây → prepared 2.567 giây, target narration 2.575 giây.
+- ASS bottom-center, max hai dòng, timestamps/global offset/no-future-word E2E: PASS.
+- Final ffprobe: 1920x1080, 30/1 fps, H.264, yuv420p, AAC, 6.500 giây, file non-empty.
+- `git diff --check`: PASS; smoke copies đã được dọn khỏi `input`, không sửa `H:\KokoroCPU`.
+
+## Giới hạn không blocking
+
+- FFmpeg/ffprobe và Kokoro environment vẫn là prerequisite local theo README.
+- Lần alignment đầu cần internet để tải model; các lần sau reuse `.cache/alignment`.
+- Forced alignment có validation nhưng không được coi là hoàn hảo với mọi audio; failure luôn explicit và không có proportional fallback.
