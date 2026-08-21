@@ -10,6 +10,8 @@ class DependencyContractTests(unittest.TestCase):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
         self.assertIn("whisperx==3.8.6", requirements)
         self.assertIn("numpy>=2.1,<3", requirements)
+        self.assertIn("Pillow>=11,<12", requirements)
+        self.assertIn("google-genai>=1.75,<2", requirements)
 
     def test_setup_pins_cpu_torch_family_and_runs_runtime_checks(self) -> None:
         setup = (ROOT / "SETUP.bat").read_text(encoding="utf-8")
@@ -19,6 +21,7 @@ class DependencyContractTests(unittest.TestCase):
         self.assertIn("https://download.pytorch.org/whl/cpu", setup)
         self.assertIn("-m pip check", setup)
         self.assertIn("import whisperx; import torch; import torchaudio", setup)
+        self.assertIn("import PIL; from google import genai", setup)
 
 
 if __name__ == "__main__":

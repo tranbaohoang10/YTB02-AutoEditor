@@ -37,7 +37,7 @@ if not exist "%KOKORO_PY%" (
   goto :failed
 )
 
-"%PROJECT_PYTHON%" -m src.pipeline --script input\script.json
+"%PROJECT_PYTHON%" -m src.pipeline --script input\script.json --build
 if errorlevel 1 goto :failed
 
 echo.

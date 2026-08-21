@@ -30,7 +30,7 @@ echo Installing CPU-only PyTorch...
 ".venv\Scripts\python.exe" -m pip install torch==2.8.0 torchaudio==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
 if errorlevel 1 goto :failed
 
-echo Installing project and WhisperX dependencies...
+echo Installing project, WhisperX, Pillow and official Google GenAI dependencies...
 ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 goto :failed
 
@@ -39,7 +39,7 @@ echo Verifying installed dependencies...
 if errorlevel 1 goto :failed
 
 echo Verifying WhisperX runtime imports without loading alignment models...
-".venv\Scripts\python.exe" -c "import whisperx; import torch; import torchaudio; print('WhisperX OK')"
+".venv\Scripts\python.exe" -c "import whisperx; import torch; import torchaudio; import PIL; from google import genai; print('WhisperX, Pillow and Google GenAI OK')"
 if errorlevel 1 goto :failed
 
 echo.

@@ -1,1 +1,1 @@
-"""YTB02 AutoEditor: local narration-first video assembly."""
+"""YTB02 AutoEditor: local image-first, audio-master video assembly."""

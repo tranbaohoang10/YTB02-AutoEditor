@@ -13,8 +13,11 @@ class ScriptLoaderTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.videos = self.root / "videos"
         self.videos.mkdir()
+        self.images = self.root / "images"
+        self.images.mkdir()
         (self.videos / "one.mp4").touch()
         (self.videos / "two.mp4").touch()
+        (self.images / "one.png").touch()
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -75,6 +78,46 @@ class ScriptLoaderTests(unittest.TestCase):
         data["scenes"][0]["video"] = "missing.mp4"
         with self.assertRaisesRegex(AutoEditorError, "không tìm thấy video"):
             load_script(self.write(data), self.videos)
+
+    def test_image_only_script_parses(self) -> None:
+        data = {
+            "title": "Image", "language": "en",
+            "scenes": [{"id": 1, "image": "one.png", "text": "Narration."}],
+        }
+        script = load_script(self.write(data), self.videos, self.images)
+        self.assertEqual(script.scenes[0].image, "one.png")
+        self.assertIsNone(script.scenes[0].video)
+
+    def test_generated_image_scene_parses_for_gemini(self) -> None:
+        data = {
+            "language": "vi", "visual": {"image_provider": "gemini_api"},
+            "scenes": [{"id": 1, "visual_hint": "Một cảnh lịch sử.", "text": "Lời kể."}],
+        }
+        script = load_script(self.write(data), self.videos, self.images)
+        self.assertEqual(script.visual.image_provider, "gemini_api")
+        self.assertEqual(script.voice, "hung_thinh")
+
+    def test_missing_every_visual_source_fails(self) -> None:
+        data = {"language": "en", "scenes": [{"id": 1, "text": "No visual."}]}
+        with self.assertRaisesRegex(AutoEditorError, "ít nhất"):
+            load_script(self.write(data), self.videos, self.images)
+
+    def test_media_path_traversal_fails(self) -> None:
+        for field, value in (("image", "../secret.png"), ("video", "../secret.mp4")):
+            with self.subTest(field=field):
+                data = {"language": "en", "scenes": [{"id": 1, field: value, "text": "Unsafe."}]}
+                with self.assertRaisesRegex(AutoEditorError, "tên file an toàn"):
+                    load_script(self.write(data), self.videos, self.images, validate_videos=False)
+
+    def test_unsupported_image_extension_fails(self) -> None:
+        data = {"language": "en", "scenes": [{"id": 1, "image": "one.gif", "text": "GIF."}]}
+        with self.assertRaisesRegex(AutoEditorError, "định dạng ảnh"):
+            load_script(self.write(data), self.videos, self.images, validate_videos=False)
+
+    def test_manual_missing_image_is_explicit(self) -> None:
+        data = {"language": "en", "scenes": [{"id": 1, "image": "missing.png", "text": "Missing."}]}
+        with self.assertRaisesRegex(AutoEditorError, "không tìm thấy ảnh"):
+            load_script(self.write(data), self.videos, self.images)
 
 
 if __name__ == "__main__":

@@ -3,10 +3,19 @@ __pycache__/
 .pytest_cache/
 .venv/
 .cache/
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.pem
+*.key
 
 input/script.json
 input/videos/*
 !input/videos/.gitkeep
+input/images/*
+!input/images/.gitkeep
 
 output/*
 !output/.gitkeep

@@ -7,8 +7,25 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Scene:
     id: int
-    video: str
+    video: str | None
     text: str
+    image: str | None = None
+    visual_hint: str | None = None
+    image_prompt: str | None = None
+    motion_type: str = "auto"
+
+
+@dataclass(frozen=True)
+class VisualSettings:
+    image_provider: str = "manual"
+    image_model: str = "gemini-3.1-flash-image"
+    style_preset: str = "newsprint-editorial"
+    aspect_ratio: str = "16:9"
+    image_size: str = "2K"
+    motion_mode: str = "local"
+    motion_provider: str | None = None
+    motion_model: str = "veo-3.1-generate-preview"
+    ai_fallback_local: bool = False
 
 
 @dataclass(frozen=True)
@@ -18,6 +35,7 @@ class Script:
     voice: str
     speed: float
     scenes: tuple[Scene, ...]
+    visual: VisualSettings = VisualSettings()
 
 
 @dataclass(frozen=True)
