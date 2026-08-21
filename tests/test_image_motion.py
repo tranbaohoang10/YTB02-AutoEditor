@@ -28,13 +28,21 @@ class ImageMotionTests(unittest.TestCase):
         self.assertEqual(command[command.index("-t") + 1], "6.270000")
         self.assertEqual(command[command.index("-r") + 1], "30")
         self.assertEqual(command[command.index("-pix_fmt") + 1], "yuv420p")
+        self.assertEqual(command[command.index("-color_range") + 1], "tv")
         self.assertEqual(command[command.index("-c:v") + 1], "libx264")
-        self.assertIn("s=1920x1080:fps=30", command[command.index("-vf") + 1])
+        filter_graph = command[command.index("-vf") + 1]
+        self.assertIn("s=1920x1080:fps=30", filter_graph)
+        self.assertIn("in_range=auto:out_range=limited", filter_graph)
+        self.assertIn("format=yuv420p", filter_graph)
+        self.assertIn("setparams=range=tv", filter_graph)
 
     def test_all_local_presets_build_commands(self) -> None:
         config = load_config(ROOT / "config.json")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for preset in MOTION_PRESETS:
-                with self.subTest(preset=preset), patch("src.image_motion.run_media_command"):
+                with self.subTest(preset=preset), patch("src.image_motion.run_media_command") as run:
                     prepare_image_scene(root / "i.png", root / "o.mp4", 1.0, config, preset, validate_output=False)
+                    filter_graph = run.call_args.args[0][run.call_args.args[0].index("-vf") + 1]
+                    self.assertIn("format=yuv420p", filter_graph)
+                    self.assertIn("setparams=range=tv", filter_graph)

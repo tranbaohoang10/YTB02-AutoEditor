@@ -28,8 +28,15 @@ def _zoompan_filter(preset: str, width: int, height: int, fps: int, frames: int)
     )
     denominator = max(1, frames - 1)
     progress = f"on/{denominator}"
+    limited_yuv420p = (
+        f"scale={width}:{height}:in_range=auto:out_range=limited,"
+        "format=yuv420p,setparams=range=tv"
+    )
     if preset == "static":
-        return f"{fill},crop={width}:{height}:(iw-ow)/2:(ih-oh)/2,fps={fps}"
+        return (
+            f"{fill},crop={width}:{height}:(iw-ow)/2:(ih-oh)/2,fps={fps},"
+            f"{limited_yuv420p}"
+        )
     if preset == "slow_push_in":
         z, x, y = f"1+0.045*{progress}", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
     elif preset == "slow_pull_out":
@@ -48,7 +55,7 @@ def _zoompan_filter(preset: str, width: int, height: int, fps: int, frames: int)
         raise AutoEditorError(f"Motion preset không hỗ trợ: {preset}")
     return (
         f"{fill},zoompan=z='{z}':x='{x}':y='{y}':d=1:"
-        f"s={width}x{height}:fps={fps}"
+        f"s={width}x{height}:fps={fps},{limited_yuv420p}"
     )
 
 
@@ -69,7 +76,7 @@ def prepare_image_scene(
         "-loop", "1", "-framerate", str(video.fps), "-i", str(source),
         "-an", "-vf", vf, "-t", f"{duration:.6f}",
         "-c:v", video.codec, "-crf", str(video.crf), "-preset", video.preset,
-        "-pix_fmt", "yuv420p", "-r", str(video.fps),
+        "-pix_fmt", "yuv420p", "-color_range", "tv", "-r", str(video.fps),
         "-video_track_timescale", "90000", str(destination),
     ]
     run_media_command(command, f"tạo local image motion cho {source.name}")
@@ -81,6 +88,8 @@ def prepare_image_scene(
             raise AutoEditorError(f"Motion output sai codec: {info.get('codec_name')}.")
         if info.get("pix_fmt") != "yuv420p":
             raise AutoEditorError(f"Motion output sai pixel format: {info.get('pix_fmt')}.")
+        if info.get("color_range") != "tv":
+            raise AutoEditorError(f"Motion output sai color range: {info.get('color_range')}.")
         if abs(float(info["fps"]) - video.fps) > 0.01:
             raise AutoEditorError(f"Motion output sai FPS: {info['fps']}.")
         if abs(float(info["duration"]) - duration) > 1 / video.fps + 0.02:

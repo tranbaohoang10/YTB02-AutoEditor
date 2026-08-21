@@ -88,6 +88,18 @@ class ScriptLoaderTests(unittest.TestCase):
         self.assertEqual(script.scenes[0].image, "one.png")
         self.assertIsNone(script.scenes[0].video)
 
+    def test_all_supported_image_extensions_parse(self) -> None:
+        for extension in (".png", ".jpg", ".jpeg", ".webp"):
+            with self.subTest(extension=extension):
+                filename = f"supported{extension}"
+                (self.images / filename).touch()
+                data = {
+                    "language": "en",
+                    "scenes": [{"id": 1, "image": filename, "text": "Supported image."}],
+                }
+                script = load_script(self.write(data), self.videos, self.images)
+                self.assertEqual(script.scenes[0].image, filename)
+
     def test_generated_image_scene_parses_for_gemini(self) -> None:
         data = {
             "language": "vi", "visual": {"image_provider": "gemini_api"},

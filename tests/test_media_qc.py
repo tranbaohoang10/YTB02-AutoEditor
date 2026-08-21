@@ -31,7 +31,7 @@ class MediaQCTests(unittest.TestCase):
                 validate_image(tiny)
 
     def test_video_qc_parses_valid_stream(self) -> None:
-        payload = {"streams": [{"codec_name": "h264", "width": 1920, "height": 1080, "r_frame_rate": "30/1", "pix_fmt": "yuv420p"}], "format": {"duration": "2.0"}}
+        payload = {"streams": [{"codec_name": "h264", "width": 1920, "height": 1080, "r_frame_rate": "30/1", "pix_fmt": "yuv420p", "color_range": "tv"}], "format": {"duration": "2.0"}}
         result = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
         with tempfile.TemporaryDirectory() as directory, patch("src.media_qc.subprocess.run", return_value=result):
             path = Path(directory) / "video.mp4"
@@ -40,6 +40,7 @@ class MediaQCTests(unittest.TestCase):
         self.assertEqual(info["codec_name"], "h264")
         self.assertEqual(info["duration"], 2.0)
         self.assertEqual(info["fps"], 30.0)
+        self.assertEqual(info["color_range"], "tv")
 
     def test_video_qc_rejects_zero_fps(self) -> None:
         payload = {"streams": [{"codec_name": "h264", "width": 1920, "height": 1080, "r_frame_rate": "0/0"}], "format": {"duration": "2.0"}}
