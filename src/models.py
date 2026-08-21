@@ -13,10 +13,12 @@ class Scene:
     visual_hint: str | None = None
     image_prompt: str | None = None
     motion_type: str = "auto"
+    assets: str | None = None
 
 
 @dataclass(frozen=True)
 class VisualSettings:
+    mode: str = "auto"
     image_provider: str = "manual"
     image_model: str = "gemini-3.1-flash-image"
     style_preset: str = "newsprint-editorial"

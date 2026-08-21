@@ -14,7 +14,10 @@ class SecurityContractTests(unittest.TestCase):
 
     def test_gitignore_protects_local_credentials_and_media(self) -> None:
         ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-        for pattern in (".env", "secrets/", "credentials/", "input/images/*", "input/videos/*"):
+        for pattern in (
+            ".env", "secrets/", "credentials/", "input/images/*",
+            "input/videos/*", "input/scenes/*",
+        ):
             self.assertIn(pattern, ignore)
 
     def test_repository_sources_contain_no_google_api_key_literal(self) -> None:

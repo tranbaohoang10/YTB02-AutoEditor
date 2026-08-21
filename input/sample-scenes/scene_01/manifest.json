@@ -1,0 +1,38 @@
+{
+  "canvas": {"width": 1920, "height": 1080},
+  "background": "background.jpg",
+  "items": [
+    {
+      "id": "map", "file": "map.png", "x": 980, "y": 535, "scale": 1.0,
+      "rotation": -1.5, "z": 1, "start": 0.0, "duration": 0.55,
+      "enter": "paper_drop", "anchor": "center"
+    },
+    {
+      "id": "bank", "file": "bank.png", "x": 560, "y": 720, "scale": 0.9,
+      "rotation": -2.0, "z": 2, "start": 0.45, "duration": 0.5,
+      "enter": "slide_left_fade", "anchor": "center"
+    },
+    {
+      "id": "pound", "file": "pound.png", "x": 940, "y": 520, "scale": 1.0,
+      "rotation": 2.0, "z": 3, "start": 0.9, "duration": 0.45,
+      "enter": "stamp_in", "anchor": "center"
+    },
+    {
+      "id": "label", "file": "label.png", "x": 1420, "y": 770, "scale": 0.95,
+      "rotation": -1.0, "z": 4, "start": 1.25, "duration": 0.4,
+      "enter": "slide_right_fade", "anchor": "center"
+    },
+    {
+      "id": "alert", "file": "alert.png", "x": 1430, "y": 350, "scale": 0.9,
+      "rotation": 2.5, "z": 5, "start": 1.6, "duration": 0.35,
+      "enter": "highlight_flash", "anchor": "center"
+    },
+    {
+      "id": "string", "file": "string.png", "x": 1090, "y": 500, "scale": 1.0,
+      "rotation": 0, "z": 6, "start": 1.9, "duration": 0.65,
+      "enter": "string_reveal", "anchor": "center"
+    }
+  ],
+  "camera": {"type": "push_in", "start": 2.6, "zoom": 1.035, "x": 8, "y": -4},
+  "transition_out": {"type": "paper_wipe", "duration": 0.45}
+}

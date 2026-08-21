@@ -15,6 +15,9 @@ class ScriptLoaderTests(unittest.TestCase):
         self.videos.mkdir()
         self.images = self.root / "images"
         self.images.mkdir()
+        self.scenes = self.root / "scenes"
+        (self.scenes / "scene_01").mkdir(parents=True)
+        (self.scenes / "scene_01" / "manifest.json").write_text("{}", encoding="utf-8")
         (self.videos / "one.mp4").touch()
         (self.videos / "two.mp4").touch()
         (self.images / "one.png").touch()
@@ -87,6 +90,17 @@ class ScriptLoaderTests(unittest.TestCase):
         script = load_script(self.write(data), self.videos, self.images)
         self.assertEqual(script.scenes[0].image, "one.png")
         self.assertIsNone(script.scenes[0].video)
+
+    def test_layered_scene_folder_parses_and_has_priority_source(self) -> None:
+        data = {
+            "language": "en", "visual": {"mode": "layered_collage"},
+            "scenes": [{"id": 1, "assets": "scene_01", "text": "Layered narration."}],
+        }
+        script = load_script(
+            self.write(data), self.videos, self.images, scenes_dir=self.scenes
+        )
+        self.assertEqual(script.scenes[0].assets, "scene_01")
+        self.assertEqual(script.visual.mode, "layered_collage")
 
     def test_all_supported_image_extensions_parse(self) -> None:
         for extension in (".png", ".jpg", ".jpeg", ".webp"):

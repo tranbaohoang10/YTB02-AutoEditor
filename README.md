@@ -4,7 +4,7 @@ YTB02 AutoEditor là pipeline dựng video local-first cho Windows. Project nh�
 
 Pipeline:
 
-`script` → resolve/generate image → image motion hoặc video source → Kokoro TTS → đo WAV thật → WhisperX forced alignment → rolling subtitle → FFmpeg assemble → `output/FINAL_VIDEO.mp4`
+`script` → layered collage / image motion / video source → Kokoro TTS → đo WAV thật → WhisperX forced alignment → rolling subtitle → FFmpeg assemble → `output/FINAL_VIDEO.mp4`
 
 ## Invariant không thay đổi từ V1
 
@@ -19,9 +19,99 @@ Pipeline:
 - Final cũ chỉ được thay sau khi `FINAL_VIDEO.building.mp4` render thành công.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
-## Ba workflow
+## Workflow ưu tiên — motion graphics layered collage
 
-### Mode A — có ảnh sẵn (khuyến nghị)
+Đây là mode phù hợp với video documentary paper-collage: một scene được dựng từ background và nhiều ảnh rời có alpha. Từng item xuất hiện theo timeline, giữ nguyên sau entrance, rồi camera có thể drift/push rất nhẹ. Renderer local, deterministic và không generatively sửa nội dung.
+
+Mỗi scene dùng một folder:
+
+```text
+input/scenes/scene_01/
+  manifest.json
+  background.jpg
+  map.png
+  bank.png
+  pound.png
+  label.png
+  string.png
+```
+
+Copy sample có sẵn để bắt đầu:
+
+```powershell
+Copy-Item -Recurse input\sample-scenes\scene_01 input\scenes\scene_01
+```
+
+Script một scene:
+
+```json
+{
+  "title": "Layered demo",
+  "language": "en",
+  "visual": {"mode": "layered_collage"},
+  "scenes": [
+    {
+      "id": 1,
+      "assets": "scene_01",
+      "text": "This exact text remains the narration and subtitle source."
+    }
+  ]
+}
+```
+
+Manifest tối thiểu:
+
+```json
+{
+  "canvas": {"width": 1920, "height": 1080},
+  "background": "background.jpg",
+  "items": [
+    {
+      "id": "map", "file": "map.png",
+      "x": 960, "y": 540, "scale": 1.0, "rotation": 0, "z": 1,
+      "start": 0.0, "duration": 0.55,
+      "enter": "paper_drop", "opacity": 1.0, "anchor": "center",
+      "end_state": {"scale": 1.02, "rotation": 1.0}
+    }
+  ],
+  "camera": {"type": "push_in", "start": 0.8, "zoom": 1.035},
+  "transition_out": {"type": "paper_wipe", "duration": 0.45}
+}
+```
+
+`x`/`y` là vị trí anchor trên canvas; `scale=1` là kích thước pixel gốc. `z` thấp được vẽ trước. `start` và `duration` tính bằng giây từ đầu scene. Item chưa tới `start` là invisible, animate trong `duration`, sau đó giữ trạng thái; `end_state` là drift tùy chọn tới cuối scene. Camera mặc định bắt đầu sau khi item cuối dựng xong nếu bỏ `camera.start`.
+
+Entrance presets:
+
+`slide_left_fade`, `slide_right_fade`, `slide_up_fade`, `slide_down_fade`, `pop_in`, `scale_in`, `stamp_in`, `paper_drop`, `slight_rotate_in`, `line_draw`, `string_reveal`, `highlight_flash`.
+
+Transition presets:
+
+`crossfade`, `paper_wipe`, `push_left`, `push_right`, `zoom_fade`, `none`.
+
+Ví dụ bảy scene chỉ cần bảy folder độc lập và giữ đúng thứ tự JSON:
+
+```json
+{
+  "language": "vi",
+  "visual": {"mode": "layered_collage"},
+  "scenes": [
+    {"id": 1, "assets": "scene_01", "text": "Nội dung chuẩn cảnh một."},
+    {"id": 2, "assets": "scene_02", "text": "Nội dung chuẩn cảnh hai."},
+    {"id": 3, "assets": "scene_03", "text": "Nội dung chuẩn cảnh ba."},
+    {"id": 4, "assets": "scene_04", "text": "Nội dung chuẩn cảnh bốn."},
+    {"id": 5, "assets": "scene_05", "text": "Nội dung chuẩn cảnh năm."},
+    {"id": 6, "assets": "scene_06", "text": "Nội dung chuẩn cảnh sáu."},
+    {"id": 7, "assets": "scene_07", "text": "Nội dung chuẩn cảnh bảy."}
+  ]
+}
+```
+
+Chạy như các mode cũ: `CHECK.bat` validate toàn bộ manifest/asset/canvas trước; `BUILD_VIDEO.bat` hoặc `RUN_ALL.bat` render. Mỗi layered clip và final vẫn là 1920×1080, 30fps, H.264, yuv420p limited/TV range; duration lấy từ WAV narration thật.
+
+## Các workflow tương thích
+
+### Mode A — có ảnh phẳng sẵn
 
 Copy ảnh `.png`, `.jpg`, `.jpeg` hoặc `.webp` vào `input\images`, đặt `visual.image_provider` là `manual`, rồi dùng `scene.image`.
 
@@ -154,6 +244,7 @@ Mỗi video mới:
 
 Mỗi scene phải có ít nhất một trong:
 
+- `assets`: safe folder name trong `input/scenes`, chứa `manifest.json` và layered assets;
 - `video`: safe filename trong `input/videos`;
 - `image`: safe filename trong `input/images`;
 - `image_prompt` hoặc `visual_hint` để provider tạo ảnh.
@@ -170,6 +261,8 @@ Style presets: `newsprint-editorial`, `photo-collage`, `modern-flat`, `american-
 
 ```text
 input/images/             ảnh manual
+input/scenes/             layered scene assets của user
+input/sample-scenes/      sample paper-collage được track trong repo
 input/videos/             video source V1
 input/script.json         source of truth
 work/audio/               WAV từng scene
@@ -183,7 +276,7 @@ output/subtitles.ass
 output/FINAL_VIDEO.mp4
 ```
 
-Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images hoặc generated-image cache.
+Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images/layered assets hoặc generated-image cache.
 
 ## Forced alignment và subtitle
 

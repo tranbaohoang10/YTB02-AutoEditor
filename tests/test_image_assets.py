@@ -31,8 +31,10 @@ class ImageAssetTests(unittest.TestCase):
         self.videos = self.root / "videos"
         self.images = self.root / "images"
         self.generated = self.root / "generated"
+        self.scenes = self.root / "scenes"
         self.videos.mkdir()
         self.images.mkdir()
+        self.scenes.mkdir()
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -53,6 +55,29 @@ class ImageAssetTests(unittest.TestCase):
         script = Script("Manual", "en", "am_eric", 1.08, (Scene(1, None, "Text", image="scene.png"),))
         assets = resolve_visual_assets(script, self.videos, self.images, self.generated)
         self.assertEqual(assets[1].path, self.images / "scene.png")
+
+    def test_layered_folder_resolves_without_image_provider(self) -> None:
+        folder = self.scenes / "scene_01"
+        folder.mkdir()
+        Image.new("RGB", (320, 180), "white").save(folder / "background.jpg")
+        Image.new("RGBA", (40, 40), "red").save(folder / "item.png")
+        (folder / "manifest.json").write_text(json.dumps({
+            "canvas": {"width": 320, "height": 180},
+            "background": "background.jpg",
+            "items": [{
+                "id": "one", "file": "item.png", "x": 160, "y": 90,
+                "start": 0, "duration": 0.2, "enter": "pop_in",
+            }],
+        }), encoding="utf-8")
+        script = Script(
+            "Layered", "en", "am_eric", 1.08,
+            (Scene(1, None, "Text", assets="scene_01"),),
+        )
+        assets = resolve_visual_assets(
+            script, self.videos, self.images, self.generated, self.scenes
+        )
+        self.assertEqual(assets[1].kind, "layered")
+        self.assertEqual(assets[1].path, folder)
 
     def test_generated_image_cache_skip_and_force(self) -> None:
         provider = FakeProvider()
