@@ -1,219 +1,222 @@
 # YTB02 AutoEditor
 
-YTB02 AutoEditor là công cụ local cho Windows: nhận các video clip đã hoàn thành và một file script JSON, tạo narration bằng Kokoro, căn từng clip theo audio, ghép scene, tạo subtitle rồi xuất `output/FINAL_VIDEO.mp4`.
+YTB02 AutoEditor là pipeline dựng video local-first cho Windows. Project nhận script JSON cùng ảnh/video do người dùng cung cấp, hoặc có thể tạo ảnh qua Google GenAI/Nano Banana khi người dùng chủ động cấu hình API. Audio narration luôn là master timeline.
 
-> Người dùng **tự cung cấp video clips**. Project này **không tạo video AI, không tạo ảnh**, không nghiên cứu nội dung và không publish YouTube.
+Pipeline:
 
-## 1. Project này làm gì?
+`script` → resolve/generate image → image motion hoặc video source → Kokoro TTS → đo WAV thật → WhisperX forced alignment → rolling subtitle → FFmpeg assemble → `output/FINAL_VIDEO.mp4`
 
-Luồng xử lý là:
+## Invariant không thay đổi từ V1
 
-`script.json + video clips` → Kokoro TTS → đo WAV thật → WhisperX forced alignment → rolling word subtitle → trim/freeze/ghép video → burn subtitle → `FINAL_VIDEO.mp4`.
+- Canonical `scene.text` là source of truth cho narration và subtitle.
+- WhisperX chỉ cung cấp timestamp; pipeline không dùng ASR transcript thay script.
+- Future word không xuất hiện trước `word.start`; SRT/ASS luôn ceil timestamp.
+- Không có proportional character/word fallback. Alignment fail là explicit và có diagnostics trong `work/alignment/`.
+- Audio scene được tạo trước và đo bằng ffprobe. Visual scene bám đúng measured WAV duration.
+- English mặc định `am_eric`, Vietnamese mặc định `hung_thinh`, speed mặc định `1.08`.
+- Loudness mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source video audio không được dùng.
+- Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC.
+- Final cũ chỉ được thay sau khi `FINAL_VIDEO.building.mp4` render thành công.
+- Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
-Audio narration là **master timeline**. Clip dài hơn audio sẽ bị trim. Clip ngắn hơn audio sẽ giữ nguyên frame cuối bằng FFmpeg, không loop và không thay đổi tốc độ mạnh. Audio gốc của clip bị bỏ trong MVP.
+## Ba workflow
 
-## 2. Cần cài gì?
+### Mode A — có ảnh sẵn (khuyến nghị)
 
-- Windows 10/11.
-- Python 3.12 cho project, nên bật tùy chọn thêm Python vào PATH khi cài.
-- FFmpeg và ffprobe có trong PATH.
-- Kokoro hiện có thể dùng ở `H:\KokoroCPU\.venv\Scripts\python.exe`.
-- Project virtual environment riêng tại `.venv` cho WhisperX/PyTorch CPU.
-
-Nếu Kokoro nằm nơi khác, sửa `kokoro_python` trong `config.json`. Code không phụ thuộc bắt buộc vào ổ H và không sửa thư mục Kokoro.
-
-Lần đầu tiên, double-click:
-
-```bat
-SETUP.bat
-```
-
-`SETUP.bat` tạo `.venv`, cài PyTorch bản CPU và WhisperX cho riêng project này. Nó không cài gì vào `H:\KokoroCPU`. Model forced-alignment chỉ tải ở lần build đầu tiên rồi được reuse từ `.cache/alignment`.
-
-## 3. Cấu trúc folder
-
-```text
-input/
-  videos/              video clip do bạn cung cấp
-  script.example.json  script mẫu
-  script.json          script thật của lần chạy (tự tạo)
-output/
-  voice.wav            narration đã ghép
-  subtitles.srt        subtitle chuẩn, UTF-8
-  subtitles.ass        subtitle có style để burn
-  FINAL_VIDEO.mp4      kết quả cuối
-work/                  WAV từng scene và media trung gian
-  alignment/           diagnostics word timing từng scene
-.cache/alignment/      model/NLTK cache, không bị xóa khi rerun
-src/                   mã nguồn Python
-tests/                 unit tests dùng mock aligner, không tải model
-```
-
-## 4. Bỏ video vào input/videos
-
-Copy mọi clip vào `input\videos\`. Tên file không bắt buộc theo `scene_01.mp4`; tên trong trường `video` của script mới là authority. Ví dụ `my_custom_clip.mp4` hoạt động bình thường.
-
-Clip nên đọc được bằng FFmpeg. Mọi clip sẽ được normalize về 1920×1080, 30 fps, H.264 và `yuv420p`. Hình được scale giữ đúng tỷ lệ rồi pad đen, không bị kéo méo.
-
-## 5. Sửa script.json
-
-Copy file mẫu trước:
-
-```bat
-copy input\script.example.json input\script.json
-```
-
-Sau đó sửa `input\script.json` bằng editor hỗ trợ UTF-8:
+Copy ảnh `.png`, `.jpg`, `.jpeg` hoặc `.webp` vào `input\images`, đặt `visual.image_provider` là `manual`, rồi dùng `scene.image`.
 
 ```json
 {
   "title": "Demo",
   "language": "en",
-  "voice": "am_eric",
-  "speed": 1.08,
+  "visual": {
+    "image_provider": "manual",
+    "style_preset": "newsprint-editorial",
+    "motion_mode": "local"
+  },
   "scenes": [
     {
       "id": 1,
-      "video": "my_custom_clip.mp4",
-      "text": "This exact text becomes narration and subtitles."
+      "image": "scene_01.png",
+      "text": "This exact text becomes narration and subtitles.",
+      "motion": {"type": "auto"}
     }
   ]
 }
 ```
 
-Quy tắc quan trọng:
+Local motion là mặc định được khuyến nghị: deterministic, chạy miễn phí bằng FFmpeg, giữ nội dung ảnh tốt nhất và không phụ thuộc API. Nó chỉ di chuyển camera; không redraw, thêm người, sửa logo/chữ/bản đồ hoặc hallucinate chi tiết.
 
-- `language` chỉ là `en` hoặc `vi`.
-- ID bắt đầu từ 1, liên tục và không trùng.
-- Thứ tự scene lấy theo ID, không theo thứ tự file trong folder.
-- `video` là tên file trong `input/videos`, không phải command hay đường dẫn tùy ý.
-- `text` không được rỗng.
-- Hỗ trợ từ 1 đến N scene, không giới hạn cứng 30 scene.
-- Nếu bỏ field `speed`, tốc độ narration mặc định là `1.08`. Giá trị explicit luôn được tôn trọng: đặt `"speed": 1.0` để dùng tốc độ 1.0 hoặc chọn giá trị khác như `1.15`.
+### Mode B — chỉ có script, tạo ảnh bằng Nano Banana/Gemini
 
-## 6. English voice
+Đặt `image_provider` là `gemini_api`, bỏ `image`, rồi cung cấp `image_prompt`, `visual_hint`, hoặc chỉ narration. Prompt priority là `image_prompt` → `visual_hint` → `scene.text`.
 
-Dùng `"language": "en"`. Voice mặc định là `am_eric`. Kokoro English được khởi tạo với American English (`lang_code="a"`) và CPU.
+```json
+{
+  "language": "en",
+  "visual": {
+    "image_provider": "gemini_api",
+    "image_model": "gemini-3.1-flash-image",
+    "style_preset": "newsprint-editorial",
+    "aspect_ratio": "16:9",
+    "image_size": "2K",
+    "motion_mode": "local"
+  },
+  "scenes": [
+    {
+      "id": 1,
+      "text": "Before sunrise London was preparing for a currency crisis.",
+      "visual_hint": "Pre-dawn London and the Bank of England, tense documentary mood."
+    }
+  ]
+}
+```
 
-## 7. Vietnamese voice
+Set key trong environment của terminal riêng; không ghi key vào JSON, `.bat`, source code hay file được commit:
 
-Dùng `"language": "vi"`. Voice mặc định là `hung_thinh`. File JSON, SRT và ASS đều được ghi Unicode để giữ dấu tiếng Việt.
+```powershell
+$env:GEMINI_API_KEY = "paste-key-in-private-terminal-only"
+$env:GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image" # optional override
+```
 
-Narration sau khi ghép scene được FFmpeg `loudnorm` về khoảng `-18 LUFS`, true peak không quá target `-1.5 dBTP` và LRA target `7 LU`, giúp âm lượng ổn định hơn giữa các video. Đây là normalization biên độ, không time-stretch và không đổi word timestamps; forced alignment vẫn chạy trên WAV scene gốc. Với audio rất ngắn hoặc đặc thù, loudness đo thực tế có thể lệch nhẹ so với target và không được quảng cáo là tuyệt đối hoàn hảo.
+Đóng terminal sau build hoặc dùng secret manager/CI secret phù hợp. Ảnh được cache trong `work/generated-images/scene_XXX.png`; sidecar JSON chứa provider/model/prompt/hash/timestamp nhưng không chứa key. Ảnh chỉ tạo lại khi prompt/provider/model đổi hoặc truyền `--force-images`.
 
-## 8. Chạy CHECK.bat
+### Mode C — ảnh + optional AI image-to-video
 
-Double click `CHECK.bat`. Script chỉ kiểm tra, không render:
+AI motion phải opt-in rõ ràng:
 
-- project `.venv` và Python;
-- ffmpeg và ffprobe;
-- WhisperX, PyTorch, alignment engine/device/config;
-- trạng thái alignment model cache (không tự tải model);
-- đường dẫn Kokoro Python;
-- import Kokoro English và Vietnamese;
-- `input/script.json`;
-- số clip trong `input/videos`.
+```json
+"visual": {
+  "image_provider": "gemini_api",
+  "motion_mode": "ai",
+  "motion_provider": "gemini_image_to_video",
+  "motion_model": "veo-3.1-generate-preview",
+  "ai_fallback_local": true
+}
+```
 
-CHECK còn chạy `--dry-run` để parse toàn bộ script và xác nhận từng tên video có thật. Thiếu script, không có clip, JSON lỗi hoặc video reference sai đều là `[FAIL]`; bước này không chạy TTS, không tải alignment model và không render.
+Adapter dùng official Google GenAI client và `GEMINI_API_KEY`; `GEMINI_VIDEO_MODEL` có thể override model. AI I2V có thể tốn quota/credit và có thể thay đổi chi tiết ảnh dù prompt yêu cầu motion nhẹ/preserve composition. Nếu `ai_fallback_local=true`, lỗi provider sẽ fallback local; nếu false, lỗi là explicit. `auto` vẫn chọn local, không silently gọi AI.
 
-Sửa mọi dòng `[FAIL]` trước khi build. Nếu `.venv` thiếu, chạy `SETUP.bat`. Dòng cảnh báo model chưa cache là bình thường trước lần build đầu; CHECK không tải model lớn.
+## Backward compatibility video-only
 
-## 9. Chạy BUILD_VIDEO.bat
+Script V1 tiếp tục hoạt động:
 
-Sau khi CHECK không còn lỗi và script/video đã sẵn sàng, double click `BUILD_VIDEO.bat`. Khi thành công, cửa sổ hiển thị:
+```json
+{
+  "language": "vi",
+  "voice": "hung_thinh",
+  "speed": 1.08,
+  "scenes": [
+    {"id": 1, "video": "scene_01.mp4", "text": "Nội dung chuẩn từ script."}
+  ]
+}
+```
+
+Copy clip vào `input\videos`. Clip dài hơn narration bị trim; clip ngắn hơn được freeze frame cuối. Video được scale giữ tỷ lệ, pad về canvas và bỏ audio gốc.
+
+## Setup và thao tác Windows
+
+Đồng bộ source:
+
+```powershell
+git switch main
+git pull --ff-only origin main
+```
+
+Lần đầu double-click `SETUP.bat`. Script tạo/reuse `.venv`, cài CPU PyTorch, WhisperX, Pillow và official `google-genai`, sau đó chạy `pip check`. Alignment model được cache ở `.cache/alignment`, không nằm trong `work/`.
+
+Mỗi video mới:
+
+1. Copy `input\script.example.json` thành `input\script.json` rồi sửa.
+2. Copy ảnh vào `input\images` hoặc video vào `input\videos` nếu dùng manual media.
+3. Double-click `CHECK.bat`.
+4. Chỉ tạo/resolve ảnh: `GENERATE_IMAGES.bat`.
+5. Build: `BUILD_VIDEO.bat`, hoặc một nút generate + build: `RUN_ALL.bat`.
+6. Lấy `output\FINAL_VIDEO.mp4`.
+
+`CHECK.bat` kiểm tra Python, FFmpeg/ffprobe, Kokoro EN/VI, WhisperX, alignment config/cache, Pillow, Google GenAI client, script, media paths, provider và credential theo mode. Manual mode không yêu cầu Gemini key. CHECK không tạo ảnh/TTS, không tải model alignment và không render.
+
+## CLI
+
+```powershell
+.venv\Scripts\python.exe -m src.pipeline --dry-run
+.venv\Scripts\python.exe -m src.pipeline --generate-images
+.venv\Scripts\python.exe -m src.pipeline --generate-images --force-images
+.venv\Scripts\python.exe -m src.pipeline --build
+.venv\Scripts\python.exe -m src.pipeline --run-all
+.venv\Scripts\python.exe -m src.pipeline --run-all --motion-mode local
+.venv\Scripts\python.exe -m src.pipeline --run-all --motion-mode ai
+```
+
+`--dry-run` chỉ parse/validate; không gọi API, không TTS, không download alignment model và không render.
+
+## Schema và validation
+
+Mỗi scene phải có ít nhất một trong:
+
+- `video`: safe filename trong `input/videos`;
+- `image`: safe filename trong `input/images`;
+- `image_prompt` hoặc `visual_hint` để provider tạo ảnh.
+
+Path phải là basename an toàn. Absolute path, `..`, subfolder và image extension khác PNG/JPG/JPEG/WebP đều fail. Scene IDs phải duy nhất, liên tục từ 1; text không rỗng; language chỉ `en`/`vi`.
+
+Local motion presets: `slow_push_in`, `slow_pull_out`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `drift_subtle`, `static`, `auto`.
+
+`auto` deterministic theo scene ID: push-in, pan-right, pull-out, pan-left, rồi các preset còn lại; rerun không random.
+
+Style presets: `newsprint-editorial`, `photo-collage`, `modern-flat`, `american-retro`, `documentary-paper-collage`. Prompt master giữ consistency và yêu cầu no text vì subtitle được pipeline render sau.
+
+## Folder
 
 ```text
-================================
-VIDEO BUILD COMPLETE
-output\FINAL_VIDEO.mp4
-================================
+input/images/             ảnh manual
+input/videos/             video source V1
+input/script.json         source of truth
+work/audio/               WAV từng scene
+work/generated-images/    ảnh API + cache metadata
+work/motion/              image-motion clips
+work/alignment/           word timing diagnostics
+.cache/alignment/         model cache lâu dài
+output/voice.wav
+output/subtitles.srt
+output/subtitles.ass
+output/FINAL_VIDEO.mp4
 ```
 
-Có thể chạy bằng terminal:
+Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images hoặc generated-image cache.
 
-```bat
-python -m src.pipeline
-python -m src.pipeline --script input\script.json
-python -m src.pipeline --script input\script.json --dry-run
-```
+## Forced alignment và subtitle
 
-`--dry-run` chỉ parse script, validate clip và liệt kê scene; nó không cần chạy TTS và không render video.
+Kokoro tạo WAV riêng từng scene. WhisperX forced-align WAV với exact `scene.text`; model được load một lần cho language/run. Missing/extra/non-monotonic/out-of-duration word đều fail và ghi `work/alignment/scene_XXX.json`. Rolling cues chỉ reveal word tại aligned start. Canonical punctuation và Unicode Vietnamese được giữ nguyên.
 
-## 10. File final nằm ở đâu?
+## Developer checks
 
-Video cuối nằm tại `output\FINAL_VIDEO.mp4`. Narration và subtitle riêng nằm tại `output\voice.wav`, `output\subtitles.srt` và `output\subtitles.ass`.
+Unit/contract tests không gọi paid API và không tải model:
 
-Khi rerun, file trung gian trong `work/` được dựng lại an toàn. Clip đầu vào không bị xóa. `FINAL_VIDEO.mp4` cũ chỉ bị thay sau khi FFmpeg tạo xong bản mới.
-
-## 11. Các lỗi thường gặp
-
-- **Python 3.12 not found:** cài Python 3.12 hoặc sửa PATH.
-- **ffmpeg/ffprobe not found:** cài FFmpeg và thêm folder `bin` vào PATH, sau đó mở lại terminal.
-- **Kokoro Python not found:** sửa `kokoro_python` trong `config.json`.
-- **Kokoro import failed:** kiểm tra package `kokoro`, `kokoro_vietnamese`, `numpy`, `soundfile` trong chính môi trường Kokoro.
-- **WhisperX import failed:** chạy lại `SETUP.bat`; không cài WhisperX vào Kokoro environment.
-- **Alignment model download failed:** kiểm tra internet ở lần build đầu; cache được giữ tại `.cache/alignment`.
-- **Word alignment failed:** xem file `work/alignment/scene_XXX.json`; pipeline không fallback âm thầm.
-- **input/script.json is missing:** copy `script.example.json` thành `script.json`.
-- **Không tìm thấy video:** tên trong script phải khớp chính xác file ở `input/videos`.
-- **JSON không hợp lệ:** kiểm tra dấu phẩy, dấu ngoặc kép và vị trí dòng/cột được báo.
-- **FFmpeg thất bại:** kiểm tra clip có hỏng hoặc codec đầu vào có được FFmpeg hỗ trợ không.
-
-Lỗi dự kiến được in ngắn gọn, không hiện traceback dài. Pipeline dừng sớm khi input hoặc môi trường không hợp lệ.
-
-## 12. Subtitle sync hoạt động như thế nào?
-
-Narration được Kokoro tạo trước thành WAV riêng cho từng scene. WhisperX sau đó chạy **forced word alignment** giữa WAV thật và transcript đã biết từ `scene.text`. Project không chạy Whisper transcription/ASR để đoán hoặc thay nội dung. Script vẫn là canonical source of truth; aligner chỉ cung cấp timestamp.
-
-Subtitle dùng rolling word reveal: một canonical word chỉ xuất hiện khi playback đạt `word.start` đã align. Future words không được hiển thị sớm. Khi caption dài, project mở window mới, giữ bottom-center, safe area, chữ trắng viền đen và tối đa hai dòng. Cả English và Vietnamese dùng model mapping mặc định của WhisperX, có thể override trong `config.json`.
-
-Đây là forced alignment có validation, không được quảng cáo là đồng bộ hoàn hảo trong mọi audio. Nếu thiếu/thừa word, sai thứ tự, thiếu timestamp hoặc vượt duration, pipeline dừng và ghi chi tiết tại `work/alignment/scene_XXX.json`. Không có silent fallback về cách chia duration theo số chữ/ký tự; `allow_approximate_fallback` mặc định là `false`.
-
-Lần đầu build có thể chậm và cần internet để tải alignment model. Các lần sau reuse `.cache/alignment`. CPU được hỗ trợ và là mode bắt buộc hiện tại; không cần NVIDIA/CUDA.
-
-## 13. Smoke test forced alignment thật
-
-Sau `SETUP.bat`, có thể kiểm tra WhisperX thật mà không chạy ASR và không render video. Nếu `input/script.json` và `work/audio/scene_001.wav` đã tồn tại:
-
-```bat
-.venv\Scripts\python.exe -m src.alignment_smoke --language en
-.venv\Scripts\python.exe -m src.alignment_smoke --language vi
-```
-
-Cũng có thể cung cấp WAV và canonical transcript riêng:
-
-```bat
-.venv\Scripts\python.exe -m src.alignment_smoke --language en --wav test-en.wav --text-file test-en.txt
-.venv\Scripts\python.exe -m src.alignment_smoke --language vi --wav test-vi.wav --text "Trước bình minh — đồng bảng chịu áp lực."
-```
-
-Tool chỉ gọi `load_align_model()`, `load_audio()` và `align()` của WhisperX, sau đó validate canonical words và in `start/end`. Nó không gọi Whisper transcription, không sửa Kokoro và không tạo video. Nếu WAV hoặc canonical text thiếu, tool báo rõ file/cách truyền tham số. Lần chạy thật đầu tiên có thể tải alignment model vào cache.
-
-## 14. Kiểm tra lần đầu trên máy thật
-
-Thực hiện lần lượt:
-
-1. Chạy `SETUP.bat`; xác nhận `pip check` và dòng `WhisperX OK` thành công.
-2. Chạy `CHECK.bat`; sửa mọi `[FAIL]` và ghi nhận cảnh báo model chưa cache nếu có.
-3. Tạo hoặc copy một WAV English có canonical text tương ứng.
-4. Chạy English alignment smoke và kiểm tra mọi canonical word có timestamp thật, đúng thứ tự, không thiếu/thừa.
-5. Tạo hoặc copy một WAV Vietnamese có canonical text tiếng Việt tương ứng.
-6. Chạy Vietnamese alignment smoke và kiểm tra dấu tiếng Việt/punctuation được giữ nguyên.
-7. Đặt 1–3 clip test vào `input/videos`, tạo `input/script.json`, trong đó nên có một clip dài hơn và một clip ngắn hơn narration.
-8. Chạy `BUILD_VIDEO.bat` và kiểm tra `output/FINAL_VIDEO.mp4` cùng `work/alignment/scene_XXX.json`.
-9. Xem video từ đầu đến cuối và xác nhận:
-   - word chỉ xuất hiện khi narration đọc tới nó, không có future word;
-   - subtitle bottom-center, safe area và tối đa hai dòng;
-   - clip dài bị trim, clip ngắn freeze frame cuối;
-   - final duration bám narration;
-   - cả English và Vietnamese đều chạy đúng trong các build tương ứng.
-
-## Kiểm thử dành cho developer
-
-Không cần internet hoặc Kokoro thật để chạy unit tests:
-
-```bat
+```powershell
 .venv\Scripts\python.exe -m unittest discover -s tests -v
+.venv\Scripts\python.exe -m compileall -q src tests
+.venv\Scripts\python.exe -m pip check
+git diff --check
 ```
 
-Các test không tải model thật. Chúng bao phủ validation script/timeline, canonical word mapping, punctuation/Unicode Vietnamese, missing/extra words, diagnostics, global offsets, rolling windows, SRT/ASS ordering và invariant không hiển thị future word.
+Real forced-alignment smoke vẫn có sẵn:
+
+```powershell
+.venv\Scripts\python.exe -m src.alignment_smoke --language en --wav test-en.wav --text "Exact canonical text."
+.venv\Scripts\python.exe -m src.alignment_smoke --language vi --wav test-vi.wav --text "Nội dung chuẩn."
+```
+
+## Lỗi thường gặp
+
+- `manual image provider cần file`: copy ảnh vào `input/images` và đặt `scene.image`.
+- `GEMINI_API_KEY`: chỉ bắt buộc khi image provider hoặc AI motion dùng Gemini.
+- `BLOCKED_EXTERNAL`: credential/quota/billing/permission/model/network hoặc provider timeout; pipeline không giả output.
+- `Ảnh corrupt/quá nhỏ`: dùng ảnh decode được, tối thiểu 640×360 và aspect hợp lý.
+- `Word alignment failed`: xem diagnostics; không có silent fallback.
+- `Kokoro Python not found`: sửa `kokoro_python` trong `config.json`; project không sửa `H:\KokoroCPU`.
+- `FFmpeg/ffprobe not found`: cài và thêm `bin` vào PATH.
+
+## Security
+
+Project không dùng browser login, cookie scraping, Selenium/Playwright auth, token extraction, account rotation hoặc quota circumvention. Subprocess nhận argument list, không `shell=True`. `.env`, credential folders, keys, input media và work artifacts đều bị ignore. CI chỉ dùng mocks/contract tests, không gọi paid API.

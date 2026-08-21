@@ -23,6 +23,8 @@ where ffprobe >nul 2>&1 && (echo [OK] ffprobe) || (echo [FAIL] ffprobe not found
 if exist "%PROJECT_PY%" (
   "%PROJECT_PY%" -c "import whisperx" >nul 2>&1 && (echo [OK] WhisperX alignment package) || (echo [FAIL] WhisperX import - run SETUP.bat & set "CHECK_FAILED=1")
   "%PROJECT_PY%" -c "import torch; assert not torch.cuda.is_available() or True; print(torch.__version__)" >nul 2>&1 && (echo [OK] PyTorch available) || (echo [FAIL] PyTorch import & set "CHECK_FAILED=1")
+  "%PROJECT_PY%" -c "import PIL" >nul 2>&1 && (echo [OK] Pillow image QC) || (echo [FAIL] Pillow import - run SETUP.bat & set "CHECK_FAILED=1")
+  "%PROJECT_PY%" -c "from google import genai" >nul 2>&1 && (echo [OK] Official Google GenAI client) || (echo [FAIL] google-genai import - run SETUP.bat & set "CHECK_FAILED=1")
 )
 
 for /f "usebackq tokens=1-4 delims=|" %%A in (`powershell -NoProfile -Command "$a=(Get-Content -Raw -LiteralPath 'config.json'|ConvertFrom-Json).alignment; Write-Output ($a.engine+'|'+$a.device+'|'+$a.allow_approximate_fallback+'|'+$a.cache_dir)"`) do (
@@ -61,23 +63,36 @@ if exist "input\script.json" (
 )
 for /f %%I in ('dir /b /a-d "input\videos" 2^>nul ^| findstr /v /i /x ".gitkeep" ^| find /v /c ""') do set "CLIP_COUNT=%%I"
 echo [INFO] Video clips in input\videos: !CLIP_COUNT!
-if "!CLIP_COUNT!"=="0" (
-  echo [FAIL] No user video clips were found in input\videos.
-  echo        Copy at least one clip into input\videos and reference it in input\script.json.
-  set "CHECK_FAILED=1"
+for /f %%I in ('dir /b /a-d "input\images" 2^>nul ^| findstr /v /i /x ".gitkeep" ^| find /v /c ""') do set "IMAGE_COUNT=%%I"
+echo [INFO] Images in input\images: !IMAGE_COUNT!
+
+if "!SCRIPT_READY!"=="1" (
+  for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$v=(Get-Content -Raw -LiteralPath 'input/script.json'|ConvertFrom-Json).visual.image_provider; if($v){$v}else{'manual'}"`) do set "IMAGE_PROVIDER=%%I"
+  echo [INFO] Image provider: !IMAGE_PROVIDER!
+  if /I "!IMAGE_PROVIDER!"=="gemini_api" (
+    if defined GEMINI_API_KEY (
+      echo [OK] GEMINI_API_KEY is configured. Value is hidden.
+    ) else (
+      echo [FAIL] GEMINI_API_KEY is required for gemini_api mode.
+      set "CHECK_FAILED=1"
+    )
+  ) else if /I "!IMAGE_PROVIDER!"=="manual" (
+    echo [OK] Manual image mode does not require GEMINI_API_KEY.
+  ) else (
+    echo [FAIL] Unsupported image provider: !IMAGE_PROVIDER!
+    set "CHECK_FAILED=1"
+  )
 )
 
 if exist "%PROJECT_PY%" (
   if "!SCRIPT_READY!"=="1" (
-    if not "!CLIP_COUNT!"=="0" (
-      echo [INFO] Validating script JSON and referenced video clips...
-      "%PROJECT_PY%" -m src.pipeline --script input\script.json --config config.json --dry-run
-      if errorlevel 1 (
-        echo [FAIL] Script or video validation failed. Read the ERROR above.
-        set "CHECK_FAILED=1"
-      ) else (
-        echo [OK] Script JSON and referenced video clips are valid.
-      )
+    echo [INFO] Validating script JSON, visual sources and provider configuration...
+    "%PROJECT_PY%" -m src.pipeline --script input\script.json --config config.json --dry-run
+    if errorlevel 1 (
+      echo [FAIL] Script, media or provider validation failed. Read the ERROR above.
+      set "CHECK_FAILED=1"
+    ) else (
+      echo [OK] Script JSON and referenced visual sources are valid.
     )
   )
 )

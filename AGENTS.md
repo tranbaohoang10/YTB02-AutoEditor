@@ -1,13 +1,16 @@
 # YTB02 AutoEditor scope
 
 - This project is a local automatic video assembler/editor.
-- The user provides all video clips; this project never creates them.
+- The user may provide image or video scene assets; image-first manual/local motion is the default workflow.
+- Optional image generation and image-to-video must use explicit official provider APIs, credentials from environment, bounded retries, and mock-only CI.
 - The JSON script is the source of truth for scene order and subtitle text.
 - Audio is the master timeline. Always use measured WAV durations.
 - Kokoro handles English and Vietnamese narration through its configured Python environment.
 - FFmpeg/ffprobe handle media processing.
 - Subtitle text comes only from the script. Do not use speech-to-text.
-- No image generation and no AI video generation.
+- Local FFmpeg image motion must remain deterministic and must not generatively alter image content.
+- AI image-to-video is optional, explicit opt-in, and must never be silently selected from local/auto mode.
+- Never automate browser login, scrape cookies/tokens, rotate accounts, evade quotas, or store/log credentials.
 - No database, message queue, Docker, backend, frontend, or web stack.
 - Keep the architecture lightweight, local, and Windows-first using Python 3.12.
 - Do not modify, delete, or write into `H:\KokoroCPU`; invoke its Python only.

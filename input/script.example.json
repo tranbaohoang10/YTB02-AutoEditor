@@ -3,11 +3,24 @@
   "language": "en",
   "voice": "am_eric",
   "speed": 1.08,
+  "visual": {
+    "image_provider": "manual",
+    "image_model": "gemini-3.1-flash-image",
+    "style_preset": "newsprint-editorial",
+    "aspect_ratio": "16:9",
+    "image_size": "2K",
+    "motion_mode": "local",
+    "motion_provider": null,
+    "motion_model": "veo-3.1-generate-preview",
+    "ai_fallback_local": false
+  },
   "scenes": [
     {
       "id": 1,
-      "video": "scene_01.mp4",
-      "text": "Before sunrise in London the Bank of England was already preparing for a fight."
+      "image": "scene_01.png",
+      "text": "Before sunrise in London the Bank of England was already preparing for a fight.",
+      "visual_hint": "Pre-dawn London, Bank of England, tense currency crisis atmosphere.",
+      "motion": {"type": "auto"}
     },
     {
       "id": 2,
