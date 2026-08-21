@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .image_prompt_builder import build_image_prompt
+from .layered_manifest import load_layered_manifest
 from .image_providers.base import ImageProvider
 from .image_providers.gemini_api import GeminiApiImageProvider
 from .image_providers.manual import ManualImageProvider
@@ -42,13 +43,20 @@ def resolve_visual_assets(
     videos_dir: Path,
     images_dir: Path,
     generated_dir: Path,
+    scenes_dir: Path | None = None,
     *,
     force: bool = False,
     provider: ImageProvider | None = None,
 ) -> dict[int, VisualAsset]:
     results: dict[int, VisualAsset] = {}
     active_provider = provider
+    scene_root = scenes_dir or videos_dir.parent / "scenes"
     for scene in script.scenes:
+        if scene.assets:
+            path = scene_root / scene.assets
+            load_layered_manifest(path)
+            results[scene.id] = VisualAsset("layered", path)
+            continue
         if scene.image:
             path = images_dir / scene.image
             validate_image(path)

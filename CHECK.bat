@@ -65,6 +65,8 @@ for /f %%I in ('dir /b /a-d "input\videos" 2^>nul ^| findstr /v /i /x ".gitkeep"
 echo [INFO] Video clips in input\videos: !CLIP_COUNT!
 for /f %%I in ('dir /b /a-d "input\images" 2^>nul ^| findstr /v /i /x ".gitkeep" ^| find /v /c ""') do set "IMAGE_COUNT=%%I"
 echo [INFO] Images in input\images: !IMAGE_COUNT!
+for /f %%I in ('dir /b /ad "input\scenes" 2^>nul ^| find /v /c ""') do set "LAYERED_COUNT=%%I"
+echo [INFO] Layered scene folders in input\scenes: !LAYERED_COUNT!
 
 if "!SCRIPT_READY!"=="1" (
   for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$v=(Get-Content -Raw -LiteralPath 'input/script.json'|ConvertFrom-Json).visual.image_provider; if($v){$v}else{'manual'}"`) do set "IMAGE_PROVIDER=%%I"

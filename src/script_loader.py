@@ -44,6 +44,7 @@ def _require_scene(raw: Any, position: int) -> Scene:
     image = _optional_text(raw, "image")
     visual_hint = _optional_text(raw, "visual_hint")
     image_prompt = _optional_text(raw, "image_prompt")
+    assets = _optional_text(raw, "assets")
     text = raw.get("text")
     if not isinstance(text, str) or not text.strip():
         raise AutoEditorError(f"Scene {scene_id}: narration 'text' không được để trống.")
@@ -55,9 +56,11 @@ def _require_scene(raw: Any, position: int) -> Scene:
             raise AutoEditorError(
                 f"Scene {scene_id}: định dạng ảnh không hỗ trợ: {Path(image).suffix or '(thiếu extension)'}."
             )
-    if not any((video, image, image_prompt, visual_hint)):
+    if assets:
+        assets = _safe_filename(assets, scene_id, "assets")
+    if not any((video, image, assets, image_prompt, visual_hint)):
         raise AutoEditorError(
-            f"Scene {scene_id}: cần ít nhất video, image, image_prompt hoặc visual_hint."
+            f"Scene {scene_id}: cần ít nhất video, image, assets, image_prompt hoặc visual_hint."
         )
     motion = raw.get("motion", {})
     if motion is None:
@@ -72,6 +75,7 @@ def _require_scene(raw: Any, position: int) -> Scene:
     return Scene(
         id=scene_id, video=video, text=text.strip(), image=image,
         visual_hint=visual_hint, image_prompt=image_prompt, motion_type=motion_type,
+        assets=assets,
     )
 
 
@@ -83,6 +87,11 @@ def _visual_settings(raw: Any) -> VisualSettings:
     provider = str(raw.get("image_provider", "manual"))
     if provider not in {"manual", "gemini_api"}:
         raise AutoEditorError("visual.image_provider chỉ hỗ trợ 'manual' hoặc 'gemini_api'.")
+    mode = str(raw.get("mode", "auto"))
+    if mode not in {"auto", "layered_collage", "motion_graphics"}:
+        raise AutoEditorError(
+            "visual.mode chỉ hỗ trợ auto, layered_collage hoặc motion_graphics."
+        )
     motion_mode = str(raw.get("motion_mode", "local"))
     if motion_mode not in {"local", "ai", "auto"}:
         raise AutoEditorError("visual.motion_mode chỉ hỗ trợ local, ai hoặc auto.")
@@ -95,6 +104,7 @@ def _visual_settings(raw: Any) -> VisualSettings:
             "visual.motion_provider chỉ hỗ trợ 'gemini_image_to_video' hoặc null."
         )
     return VisualSettings(
+        mode=mode,
         image_provider=provider,
         image_model=str(raw.get("image_model", "gemini-3.1-flash-image")),
         style_preset=str(raw.get("style_preset", "newsprint-editorial")),
@@ -113,6 +123,7 @@ def load_script(
     images_dir: Path | None = None,
     *,
     validate_videos: bool = True,
+    scenes_dir: Path | None = None,
 ) -> Script:
     try:
         raw = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -154,9 +165,16 @@ def load_script(
     scenes.sort(key=lambda scene: scene.id)
     visual = _visual_settings(raw.get("visual"))
     image_root = images_dir or videos_dir.parent / "images"
+    scene_root = scenes_dir or videos_dir.parent / "scenes"
     if validate_videos:
         for scene in scenes:
-            if scene.image:
+            if scene.assets:
+                manifest_path = scene_root / scene.assets / "manifest.json"
+                if not manifest_path.is_file():
+                    raise AutoEditorError(
+                        f"Scene {scene.id}: không tìm thấy manifest {manifest_path}"
+                    )
+            elif scene.image:
                 image_path = image_root / scene.image
                 if not image_path.is_file():
                     raise AutoEditorError(f"Scene {scene.id}: không tìm thấy ảnh {image_path}")

@@ -11,6 +11,8 @@ from .alignment import align_timeline
 from .config import AppConfig, load_config
 from .ffmpeg_utils import probe_duration, require_executable
 from .image_assets import VisualAsset, resolve_visual_assets
+from .layered_composer import render_layered_scene
+from .layered_manifest import SceneTransition, load_layered_manifest
 from .motion_service import render_image_motion
 from .motion_providers.ai_image_to_video import create_ai_motion_provider
 from .models import AutoEditorError, Script, TimelineEntry
@@ -21,6 +23,7 @@ from .tts_bridge import generate_narration
 from .video_builder import (
     concat_audio_scenes,
     concat_video_scenes,
+    concat_video_scenes_with_transitions,
     prepare_video_scene,
     render_final_video,
 )
@@ -56,7 +59,9 @@ def _display_dry_run(script: Script, videos_dir: Path, images_dir: Path) -> None
     print(f"Language: {script.language} | Voice: {script.voice} | Speed: {script.speed}")
     print(f"Scenes: {len(script.scenes)}")
     for scene in script.scenes:
-        if scene.image:
+        if scene.assets:
+            source = videos_dir.parent / "scenes" / scene.assets / "manifest.json"
+        elif scene.image:
             source = images_dir / scene.image
         elif scene.video:
             source = videos_dir / scene.video
@@ -80,6 +85,12 @@ def _prepare_scenes(
         print(f"       Scene {entry.scene.id:02d} {asset.kind} -> {target_duration:.2f} sec")
         if asset.kind == "video":
             prepare_video_scene(asset.path, destination, target_duration, config)
+        elif asset.kind == "layered":
+            manifest = load_layered_manifest(
+                asset.path, expected_width=config.video.width,
+                expected_height=config.video.height,
+            )
+            render_layered_scene(manifest, destination, target_duration, config)
         else:
             motion_output = motion_dir / f"scene_{entry.scene.id:03d}.mp4"
             render_image_motion(
@@ -106,6 +117,7 @@ def run_pipeline(
     config = load_config(config_path)
     videos_dir = PROJECT_ROOT / "input" / "videos"
     images_dir = PROJECT_ROOT / "input" / "images"
+    layered_scenes_dir = PROJECT_ROOT / "input" / "scenes"
     output_dir = PROJECT_ROOT / "output"
     work_dir = PROJECT_ROOT / "work"
     generated_dir = work_dir / "generated-images"
@@ -113,8 +125,17 @@ def run_pipeline(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     print("[2/10] Validating script and visual sources")
-    script = load_script(script_path, videos_dir, images_dir)
+    script = load_script(
+        script_path, videos_dir, images_dir, scenes_dir=layered_scenes_dir
+    )
     if dry_run:
+        for scene in script.scenes:
+            if scene.assets:
+                load_layered_manifest(
+                    layered_scenes_dir / scene.assets,
+                    expected_width=config.video.width,
+                    expected_height=config.video.height,
+                )
         if script.visual.image_provider == "gemini_api" and not os.environ.get("GEMINI_API_KEY"):
             raise AutoEditorError(
                 "BLOCKED_EXTERNAL: visual.image_provider=gemini_api cần GEMINI_API_KEY."
@@ -135,12 +156,12 @@ def run_pipeline(
 
     print("[3/10] Resolving visual assets")
     assets = resolve_visual_assets(
-        script, videos_dir, images_dir, generated_dir,
+        script, videos_dir, images_dir, generated_dir, layered_scenes_dir,
         force=force_images, provider=image_provider,
     )
     if generate_images_only:
-        generated = sum(1 for asset in assets.values() if asset.kind == "image")
-        print(f"GENERATE IMAGES COMPLETE - {generated} image asset(s) ready.")
+        ready = sum(1 for asset in assets.values() if asset.kind in {"image", "layered"})
+        print(f"GENERATE IMAGES COMPLETE - {ready} image/layered asset(s) ready.")
         return None
 
     require_executable(config.ffmpeg, "FFmpeg")
@@ -189,7 +210,23 @@ def run_pipeline(
         fallback_local=script.visual.ai_fallback_local,
     )
     joined_video = work_dir / "joined_video.mp4"
-    concat_video_scenes(prepared, joined_video, config, work_dir)
+    transitions: list[SceneTransition] = []
+    for scene in script.scenes[:-1]:
+        asset = assets[scene.id]
+        if asset.kind == "layered":
+            transitions.append(load_layered_manifest(asset.path).transition_out)
+        else:
+            transitions.append(SceneTransition())
+    if any(transition.type != "none" for transition in transitions):
+        durations = [
+            entry.duration + (config.audio.gap_ms / 1000.0 if index < len(timeline) - 1 else 0.0)
+            for index, entry in enumerate(timeline)
+        ]
+        concat_video_scenes_with_transitions(
+            prepared, durations, transitions, joined_video, config
+        )
+    else:
+        concat_video_scenes(prepared, joined_video, config, work_dir)
     print("[8/10] Concatenating and normalizing narration")
     voice_path = output_dir / "voice.wav"
     concat_audio_scenes([entry.audio_path for entry in timeline], voice_path, config, work_dir)

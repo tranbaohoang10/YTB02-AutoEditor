@@ -16,6 +16,8 @@ input/videos/*
 !input/videos/.gitkeep
 input/images/*
 !input/images/.gitkeep
+input/scenes/*
+!input/scenes/.gitkeep
 
 output/*
 !output/.gitkeep
