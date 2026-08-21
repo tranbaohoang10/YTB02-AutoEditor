@@ -36,7 +36,8 @@ def probe_video(path: Path, ffprobe: str) -> dict[str, Any]:
         raise AutoEditorError(f"Video rỗng hoặc không tồn tại: {path}")
     command = [
         ffprobe, "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=codec_name,width,height,r_frame_rate,pix_fmt:format=duration",
+        "-show_entries",
+        "stream=codec_name,width,height,r_frame_rate,pix_fmt,color_range:format=duration",
         "-of", "json", str(path),
     ]
     try:
