@@ -22,6 +22,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(audio.target_lufs, -18.0)
         self.assertEqual(audio.true_peak_db, -1.5)
         self.assertEqual(audio.lra, 7.0)
+        self.assertEqual(audio.gap_ms, 0)
+        self.assertEqual(audio.narration_edge_silence_ms, 50)
+        self.assertEqual(audio.mix_sample_rate, 48000)
+        self.assertTrue(audio.preserve_source_audio)
+        self.assertEqual(audio.source_audio_gain_db, -18.0)
+        self.assertEqual(audio.source_audio_fade_ms, 120)
 
 
 if __name__ == "__main__":

@@ -62,6 +62,40 @@ def probe_duration(path: Path, ffprobe: str) -> float:
     return duration
 
 
+def probe_audio_duration(path: Path, ffprobe: str) -> float | None:
+    """Return first audio-stream duration, or None when media has no audio stream."""
+    if not path.is_file() or path.stat().st_size == 0:
+        raise AutoEditorError(f"Media file rỗng hoặc không tồn tại: {path}")
+    command = [
+        ffprobe, "-v", "error", "-select_streams", "a:0",
+        "-show_entries", "stream=duration:format=duration", "-of", "json", str(path),
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+    except OSError as exc:
+        raise AutoEditorError(f"Không chạy được ffprobe: {exc}") from exc
+    if result.returncode != 0:
+        raise AutoEditorError(f"ffprobe không đọc được {path}: {result.stderr.strip()}")
+    try:
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        if not streams:
+            return None
+        raw_duration = streams[0].get("duration")
+        try:
+            duration = float(raw_duration)
+        except (TypeError, ValueError):
+            duration = float(data.get("format", {}).get("duration"))
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise AutoEditorError(f"ffprobe không trả về audio duration hợp lệ cho {path}") from exc
+    if duration <= 0:
+        raise AutoEditorError(f"Audio duration không hợp lệ ({duration}) cho {path}")
+    return duration
+
+
 def write_concat_file(paths: Sequence[Path], destination: Path) -> None:
     if not paths:
         raise AutoEditorError("Không có file để concat.")

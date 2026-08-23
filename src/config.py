@@ -21,8 +21,14 @@ class VideoConfig:
 @dataclass(frozen=True)
 class AudioConfig:
     sample_rate: int
+    mix_sample_rate: int
     aac_bitrate: str
     gap_ms: int
+    narration_edge_silence_ms: int
+    narration_silence_threshold_db: float
+    preserve_source_audio: bool
+    source_audio_gain_db: float
+    source_audio_fade_ms: int
     normalize_loudness: bool
     target_lufs: float
     true_peak_db: float
@@ -87,6 +93,9 @@ def load_config(path: Path) -> AppConfig:
         normalize_loudness = audio.get("normalize_loudness", True)
         if not isinstance(normalize_loudness, bool):
             raise TypeError("audio.normalize_loudness phải là boolean")
+        preserve_source_audio = audio.get("preserve_source_audio", True)
+        if not isinstance(preserve_source_audio, bool):
+            raise TypeError("audio.preserve_source_audio phải là boolean")
         kokoro_python = Path(str(data["kokoro_python"]))
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
@@ -101,8 +110,16 @@ def load_config(path: Path) -> AppConfig:
             ),
             audio=AudioConfig(
                 sample_rate=int(audio["sample_rate"]),
+                mix_sample_rate=int(audio.get("mix_sample_rate", 48000)),
                 aac_bitrate=str(audio["aac_bitrate"]),
                 gap_ms=int(audio["gap_ms"]),
+                narration_edge_silence_ms=int(audio.get("narration_edge_silence_ms", 50)),
+                narration_silence_threshold_db=float(
+                    audio.get("narration_silence_threshold_db", -50.0)
+                ),
+                preserve_source_audio=preserve_source_audio,
+                source_audio_gain_db=float(audio.get("source_audio_gain_db", -18.0)),
+                source_audio_fade_ms=int(audio.get("source_audio_fade_ms", 120)),
                 normalize_loudness=normalize_loudness,
                 target_lufs=float(audio.get("target_lufs", -18.0)),
                 true_peak_db=float(audio.get("true_peak_db", -1.5)),
@@ -132,8 +149,18 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError(f"config.json có giá trị thiếu hoặc không hợp lệ: {exc}") from exc
     if result.video.width <= 0 or result.video.height <= 0 or result.video.fps <= 0:
         raise AutoEditorError("Kích thước và FPS trong config phải lớn hơn 0.")
-    if result.audio.sample_rate <= 0 or result.audio.gap_ms < 0:
-        raise AutoEditorError("sample_rate phải > 0 và gap_ms phải >= 0.")
+    if result.audio.sample_rate <= 0 or result.audio.mix_sample_rate <= 0:
+        raise AutoEditorError("sample_rate và mix_sample_rate phải > 0.")
+    if result.audio.gap_ms < 0 or result.audio.gap_ms > 150:
+        raise AutoEditorError("gap_ms phải trong khoảng 0..150 ms.")
+    if not 0 <= result.audio.narration_edge_silence_ms <= 150:
+        raise AutoEditorError("narration_edge_silence_ms phải trong khoảng 0..150 ms.")
+    if not -90.0 <= result.audio.narration_silence_threshold_db <= -20.0:
+        raise AutoEditorError("narration_silence_threshold_db phải trong khoảng -90..-20 dB.")
+    if not -60.0 <= result.audio.source_audio_gain_db <= 0.0:
+        raise AutoEditorError("source_audio_gain_db phải trong khoảng -60..0 dB.")
+    if not 0 <= result.audio.source_audio_fade_ms <= 2000:
+        raise AutoEditorError("source_audio_fade_ms phải trong khoảng 0..2000 ms.")
     if not -70.0 <= result.audio.target_lufs <= -5.0:
         raise AutoEditorError("audio.target_lufs phải trong khoảng -70..-5 LUFS.")
     if not -9.0 <= result.audio.true_peak_db <= 0.0:

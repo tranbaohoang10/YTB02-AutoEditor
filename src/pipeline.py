@@ -10,7 +10,7 @@ from typing import Any
 
 from .alignment import align_timeline
 from .config import AppConfig, load_config
-from .ffmpeg_utils import probe_duration, require_executable
+from .ffmpeg_utils import probe_audio_duration, probe_duration, require_executable
 from .image_assets import VisualAsset, resolve_visual_assets
 from .layered_composer import render_layered_scene
 from .layered_manifest import SceneTransition, load_layered_manifest
@@ -22,11 +22,14 @@ from .subtitles import create_rolling_cues, write_ass, write_srt
 from .timing import build_timeline
 from .tts_bridge import generate_narration
 from .video_builder import (
+    SourceAudioClip,
+    build_source_audio_mix,
     concat_audio_scenes,
     concat_video_scenes,
     concat_video_scenes_with_transitions,
     prepare_video_scene,
     render_final_video,
+    trim_narration_padding,
 )
 
 
@@ -86,7 +89,10 @@ def _clean_work_directory(work_dir: Path) -> tuple[Path, Path, Path, Path]:
         if directory.exists():
             shutil.rmtree(directory)
         directory.mkdir(parents=True, exist_ok=True)
-    for filename in ("tts_manifest.json", "video_concat.txt", "audio_concat.txt", "gap.wav", "joined_video.mp4"):
+    for filename in (
+        "tts_manifest.json", "video_concat.txt", "audio_concat.txt", "gap.wav",
+        "joined_video.mp4", "source_sfx.wav",
+    ):
         path = work_dir / filename
         if path.is_file():
             path.unlink()
@@ -139,6 +145,29 @@ def _prepare_scenes(
             shutil.copy2(motion_output, destination)
         results.append(destination)
     return results
+
+
+def _collect_source_audio_clips(
+    timeline: tuple[TimelineEntry, ...], assets: dict[int, VisualAsset],
+    config: AppConfig,
+) -> list[SourceAudioClip]:
+    clips: list[SourceAudioClip] = []
+    if not config.audio.preserve_source_audio:
+        return clips
+    for index, entry in enumerate(timeline):
+        asset = assets[entry.scene.id]
+        if asset.kind != "video":
+            continue
+        source_duration = probe_audio_duration(asset.path, config.ffprobe)
+        if source_duration is None:
+            continue
+        visual_duration = entry.duration + (
+            config.audio.gap_ms / 1000.0 if index < len(timeline) - 1 else 0.0
+        )
+        clips.append(
+            SourceAudioClip(asset.path, entry.start, min(source_duration, visual_duration))
+        )
+    return clips
 
 
 def run_pipeline(
@@ -214,6 +243,8 @@ def run_pipeline(
         script, config.kokoro_python, PROJECT_ROOT / "src" / "kokoro_worker.py",
         audio_dir, work_dir, config.audio.sample_rate,
     )
+    narration_paths = [audio_dir / f"scene_{scene.id:03d}.wav" for scene in script.scenes]
+    trim_narration_padding(narration_paths, config)
     timeline = build_timeline(
         script.scenes, audio_dir,
         lambda path: probe_duration(path, config.ffprobe), config.audio.gap_ms,
@@ -269,6 +300,12 @@ def run_pipeline(
     print("[8/10] Concatenating and normalizing narration")
     voice_path = output_dir / "voice.wav"
     concat_audio_scenes([entry.audio_path for entry in timeline], voice_path, config, work_dir)
+    source_audio_clips = _collect_source_audio_clips(timeline, assets, config)
+    source_sfx_path = work_dir / "source_sfx.wav"
+    has_source_sfx = build_source_audio_mix(
+        source_audio_clips, source_sfx_path, total, config
+    )
+    print(f"       Source-video audio: {len(source_audio_clips)} scene(s) mixed")
 
     print("[9/10] Creating rolling word subtitles")
     cues = create_rolling_cues(alignments, timeline, config.subtitles)
@@ -283,7 +320,10 @@ def run_pipeline(
     try:
         if temporary.is_file():
             temporary.unlink()
-        render_final_video(joined_video, voice_path, ass_path, temporary, config)
+        render_final_video(
+            joined_video, voice_path, ass_path, temporary, config,
+            source_sfx_path if has_source_sfx else None,
+        )
         atomic_replace_final(temporary, final_path)
     except BaseException:
         if temporary.is_file():
