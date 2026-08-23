@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -30,11 +31,49 @@ from .video_builder import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FINAL_VIDEO_PATTERN = re.compile(r"FINAL_VIDEO_([0-9]+)\.mp4\Z")
+FINAL_VIDEO_RESERVATION_ATTEMPTS = 100
+
+
+def _existing_final_videos(output_dir: Path) -> list[tuple[int, Path]]:
+    matches: list[tuple[int, Path]] = []
+    for path in output_dir.iterdir():
+        match = FINAL_VIDEO_PATTERN.fullmatch(path.name)
+        if match and path.is_file():
+            matches.append((int(match.group(1)), path))
+    return matches
+
+
+def reserve_final_video_path(output_dir: Path) -> Path:
+    """Atomically reserve the next max-plus-one final-video filename."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for _ in range(FINAL_VIDEO_RESERVATION_ATTEMPTS):
+        existing = _existing_final_videos(output_dir)
+        next_number = max((number for number, _ in existing), default=0) + 1
+        candidate = output_dir / f"FINAL_VIDEO_{next_number}.mp4"
+        try:
+            descriptor = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue
+        os.close(descriptor)
+        return candidate
+    raise AutoEditorError(
+        "Không thể giữ tên video final mới do có quá nhiều build đồng thời."
+    )
+
+
+def latest_final_video_path(output_dir: Path) -> Path:
+    existing = _existing_final_videos(output_dir)
+    if not existing:
+        raise AutoEditorError(f"Không tìm thấy video final trong: {output_dir}")
+    return max(existing, key=lambda item: (item[0], item[1].name))[1]
 
 
 def atomic_replace_final(temporary: Path, final_path: Path) -> None:
     if not temporary.is_file() or temporary.stat().st_size == 0:
         raise AutoEditorError("FFmpeg không tạo được video cuối hợp lệ.")
+    if not final_path.is_file() or final_path.stat().st_size != 0:
+        raise AutoEditorError(f"Tên video final không còn được giữ an toàn: {final_path}")
     os.replace(temporary, final_path)
 
 
@@ -238,13 +277,20 @@ def run_pipeline(
     write_srt(cues, srt_path)
     write_ass(cues, ass_path, config.subtitles, config.video.width, config.video.height)
 
-    print("[10/10] Rendering FINAL_VIDEO.mp4")
-    final_path = output_dir / "FINAL_VIDEO.mp4"
-    temporary = output_dir / "FINAL_VIDEO.building.mp4"
-    if temporary.is_file():
-        temporary.unlink()
-    render_final_video(joined_video, voice_path, ass_path, temporary, config)
-    atomic_replace_final(temporary, final_path)
+    final_path = reserve_final_video_path(output_dir)
+    temporary = output_dir / f"{final_path.stem}.building.mp4"
+    print(f"[10/10] Rendering {final_path.name}")
+    try:
+        if temporary.is_file():
+            temporary.unlink()
+        render_final_video(joined_video, voice_path, ass_path, temporary, config)
+        atomic_replace_final(temporary, final_path)
+    except BaseException:
+        if temporary.is_file():
+            temporary.unlink()
+        if final_path.is_file() and final_path.stat().st_size == 0:
+            final_path.unlink()
+        raise
     print("\nDONE")
     return final_path
 
@@ -283,7 +329,8 @@ def main(argv: list[str] | None = None) -> int:
             motion_mode=args.motion_mode,
         )
         if result:
-            print(f"Video: {result}")
+            print("\nFINAL VIDEO:")
+            print(result.resolve())
         return 0
     except AutoEditorError as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)

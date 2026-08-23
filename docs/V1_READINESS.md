@@ -119,7 +119,7 @@ Quy ước:
 
 | Mục | Trạng thái | Evidence |
 |---|---|---|
-| I1 | PASS | Real `output/FINAL_VIDEO.mp4` được tạo. |
+| I1 | PASS | Real `output/FINAL_VIDEO_<số>.mp4` được tạo. |
 | I2 | PASS | Real file size 1,133,901 bytes. |
 | I3 | PASS | ffprobe xác nhận video stream. |
 | I4 | PASS | ffprobe xác nhận audio stream. |
@@ -129,7 +129,7 @@ Quy ước:
 | I8 | PASS | ffprobe: AAC. |
 | I9 | PASS | FFmpeg ASS filter hoàn tất và artifact verifier PASS. |
 | I10 | PASS | Final 6.500 giây khớp narration timeline trong frame tolerance. |
-| I11 | PASS | Render vào `FINAL_VIDEO.building.mp4`, chỉ `os.replace` final sau khi build thành công. |
+| I11 | PASS | Render vào file `.building.mp4` theo số đã giữ, chỉ `os.replace` reservation sau khi build thành công. |
 
 ## J. Error handling
 

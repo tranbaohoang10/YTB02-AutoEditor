@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.config import load_config
 from src.models import Scene, SceneAlignment, TimelineEntry, WordTiming
+from src.pipeline import latest_final_video_path
 from src.subtitles import create_rolling_cues, format_ass_timestamp, format_srt_timestamp
 
 
@@ -54,7 +55,7 @@ def main() -> int:
         assert f"{format_srt_timestamp(cue.start)} --> {format_srt_timestamp(cue.end)}" in srt
         assert f"Dialogue: 0,{format_ass_timestamp(cue.start)},{format_ass_timestamp(cue.end)}," in ass
     assert ",0,2,60,60,70,1" in ass
-    final = _probe(ROOT / "output/FINAL_VIDEO.mp4")
+    final = _probe(latest_final_video_path(ROOT / "output"))
     motion = _probe(ROOT / "work/motion/scene_001.mp4")
     video = next(stream for stream in final["streams"] if stream["codec_type"] == "video")
     audio = next(stream for stream in final["streams"] if stream["codec_type"] == "audio")

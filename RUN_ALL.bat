@@ -16,7 +16,6 @@ if errorlevel 1 goto :failed
 echo.
 echo ================================
 echo VIDEO BUILD COMPLETE
-echo output\FINAL_VIDEO.mp4
 echo ================================
 pause
 exit /b 0

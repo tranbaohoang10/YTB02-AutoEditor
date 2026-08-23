@@ -4,7 +4,7 @@ YTB02 AutoEditor là pipeline dựng video local-first cho Windows. Project nh�
 
 Pipeline:
 
-`script` → layered collage / image motion / video source → Kokoro TTS → đo WAV thật → WhisperX forced alignment → rolling subtitle → FFmpeg assemble → `output/FINAL_VIDEO.mp4`
+`script` → layered collage / image motion / video source → Kokoro TTS → đo WAV thật → WhisperX forced alignment → rolling subtitle → FFmpeg assemble → `output/FINAL_VIDEO_<số>.mp4`
 
 ## Invariant không thay đổi từ V1
 
@@ -16,7 +16,7 @@ Pipeline:
 - English mặc định `am_eric`, Vietnamese mặc định `hung_thinh`, speed mặc định `1.08`.
 - Loudness mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source video audio không được dùng.
 - Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC.
-- Final cũ chỉ được thay sau khi `FINAL_VIDEO.building.mp4` render thành công.
+- Mỗi build thành công tạo `FINAL_VIDEO_<số>.mp4` mới theo số lớn nhất hiện có + 1; video cũ không bị ghi đè. Tên được giữ trước khi FFmpeg render để giảm nguy cơ collision giữa các build đồng thời.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
 ## Workflow ưu tiên — motion graphics layered collage
@@ -222,7 +222,7 @@ Mỗi video mới:
 3. Double-click `CHECK.bat`.
 4. Chỉ tạo/resolve ảnh: `GENERATE_IMAGES.bat`.
 5. Build: `BUILD_VIDEO.bat`, hoặc một nút generate + build: `RUN_ALL.bat`.
-6. Lấy `output\FINAL_VIDEO.mp4`.
+6. Lấy file mới nhất dạng `output\FINAL_VIDEO_<số>.mp4`; console in đường dẫn tuyệt đối dưới nhãn `FINAL VIDEO:` khi build thành công.
 
 `CHECK.bat` kiểm tra Python, FFmpeg/ffprobe, Kokoro EN/VI, WhisperX, alignment config/cache, Pillow, Google GenAI client, script, media paths, provider và credential theo mode. Manual mode không yêu cầu Gemini key. CHECK không tạo ảnh/TTS, không tải model alignment và không render.
 
@@ -273,10 +273,10 @@ work/alignment/           word timing diagnostics
 output/voice.wav
 output/subtitles.srt
 output/subtitles.ass
-output/FINAL_VIDEO.mp4
+output/FINAL_VIDEO_<số>.mp4
 ```
 
-Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images/layered assets hoặc generated-image cache.
+Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images/layered assets, generated-image cache hoặc video final cũ. Chỉ file khớp chính xác `FINAL_VIDEO_<integer>.mp4` tham gia cấp số; các tên như `FINAL_VIDEO_backup.mp4` bị bỏ qua.
 
 ## Forced alignment và subtitle
 
