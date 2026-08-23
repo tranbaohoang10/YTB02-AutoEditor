@@ -1,11 +1,21 @@
-import unittest
+import io
 import os
 import tempfile
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from src.models import AutoEditorError, Scene, Script, VisualSettings
-from src.pipeline import _parser, atomic_replace_final, main, run_pipeline
+from src.pipeline import (
+    _parser,
+    atomic_replace_final,
+    latest_final_video_path,
+    main,
+    reserve_final_video_path,
+    run_pipeline,
+)
 
 
 class CLIContractTests(unittest.TestCase):
@@ -33,6 +43,13 @@ class CLIContractTests(unittest.TestCase):
         resolve.assert_not_called()
         tts.assert_not_called()
 
+    def test_main_prints_absolute_final_video_path(self) -> None:
+        final = Path("output/FINAL_VIDEO_5.mp4")
+        stdout = io.StringIO()
+        with patch("src.pipeline.run_pipeline", return_value=final), redirect_stdout(stdout):
+            self.assertEqual(main(["--build"]), 0)
+        self.assertIn(f"FINAL VIDEO:\n{final.resolve()}", stdout.getvalue())
+
     def test_gemini_dry_run_missing_key_is_explicit_without_api_call(self) -> None:
         script = Script(
             "Dry", "en", "am_eric", 1.08,
@@ -46,16 +63,79 @@ class CLIContractTests(unittest.TestCase):
                 run_pipeline(Path("script.json"), Path(__file__).resolve().parents[1] / "config.json", True)
         resolve.assert_not_called()
 
-    def test_atomic_final_replacement_preserves_old_final_on_invalid_temp(self) -> None:
+    def test_numbered_final_starts_at_one_for_empty_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                reserve_final_video_path(Path(directory)).name,
+                "FINAL_VIDEO_1.mp4",
+            )
+
+    def test_numbered_final_increments_one(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            final = root / "FINAL_VIDEO.mp4"
-            temporary = root / "FINAL_VIDEO.building.mp4"
-            final.write_bytes(b"old")
+            (root / "FINAL_VIDEO_1.mp4").write_bytes(b"old")
+            self.assertEqual(reserve_final_video_path(root).name, "FINAL_VIDEO_2.mp4")
+
+    def test_numbered_final_increments_contiguous_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for number in (1, 2, 3):
+                (root / f"FINAL_VIDEO_{number}.mp4").write_bytes(b"old")
+            self.assertEqual(reserve_final_video_path(root).name, "FINAL_VIDEO_4.mp4")
+
+    def test_numbered_final_uses_max_instead_of_filling_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for number in (1, 4):
+                (root / f"FINAL_VIDEO_{number}.mp4").write_bytes(b"old")
+            self.assertEqual(reserve_final_video_path(root).name, "FINAL_VIDEO_5.mp4")
+
+    def test_numbered_final_ignores_nonmatching_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "FINAL_VIDEO_backup.mp4",
+                "FINAL_VIDEO_test.mp4",
+                "abc.mp4",
+                "FINAL_VIDEO_9.MP4",
+                "prefix_FINAL_VIDEO_8.mp4",
+            ):
+                (root / name).write_bytes(b"unrelated")
+            (root / "FINAL_VIDEO_3.mp4").mkdir()
+            self.assertEqual(reserve_final_video_path(root).name, "FINAL_VIDEO_1.mp4")
+
+    def test_concurrent_reservations_do_not_collide(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                names = {
+                    path.name
+                    for path in executor.map(reserve_final_video_path, (root, root))
+                }
+            self.assertEqual(names, {"FINAL_VIDEO_1.mp4", "FINAL_VIDEO_2.mp4"})
+
+    def test_latest_numbered_final_uses_exact_pattern(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "FINAL_VIDEO_2.mp4").write_bytes(b"old")
+            (root / "FINAL_VIDEO_backup.mp4").write_bytes(b"ignore")
+            self.assertEqual(latest_final_video_path(root).name, "FINAL_VIDEO_2.mp4")
+
+    def test_atomic_final_publish_requires_owned_empty_reservation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            final = root / "FINAL_VIDEO_1.mp4"
+            temporary = root / "FINAL_VIDEO_1.building.mp4"
+            final.touch()
             temporary.touch()
             with self.assertRaisesRegex(AutoEditorError, "không tạo được"):
                 atomic_replace_final(temporary, final)
-            self.assertEqual(final.read_bytes(), b"old")
             temporary.write_bytes(b"new")
             atomic_replace_final(temporary, final)
+            self.assertEqual(final.read_bytes(), b"new")
+
+            next_temporary = root / "FINAL_VIDEO_2.building.mp4"
+            next_temporary.write_bytes(b"newer")
+            with self.assertRaisesRegex(AutoEditorError, "không còn được giữ"):
+                atomic_replace_final(next_temporary, final)
             self.assertEqual(final.read_bytes(), b"new")
