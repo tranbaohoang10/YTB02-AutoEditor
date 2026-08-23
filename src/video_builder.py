@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import math
+import os
+import sys
+import wave
+from array import array
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
@@ -17,6 +23,117 @@ _XFADE_TRANSITIONS = {
     "zoom_fade": "zoomin",
     "none": "fade",
 }
+
+
+@dataclass(frozen=True)
+class SourceAudioClip:
+    path: Path
+    start: float
+    duration: float
+
+
+def trim_narration_padding(
+    audio_paths: Sequence[Path], config: AppConfig,
+) -> None:
+    """Trim only generated leading/trailing padding; internal pauses stay untouched."""
+    for audio_path in audio_paths:
+        temporary = audio_path.with_suffix(".trimmed.wav")
+        try:
+            with wave.open(str(audio_path), "rb") as source:
+                parameters = source.getparams()
+                frames = source.readframes(source.getnframes())
+            if parameters.nchannels != 1 or parameters.sampwidth != 2:
+                raise AutoEditorError(
+                    f"Narration WAV phải là mono PCM 16-bit: {audio_path.name}"
+                )
+            samples = array("h")
+            samples.frombytes(frames)
+            if sys.byteorder != "little":
+                samples.byteswap()
+            window = max(1, parameters.framerate // 100)
+            threshold = 32767.0 * 10 ** (
+                config.audio.narration_silence_threshold_db / 20.0
+            )
+            active: list[int] = []
+            for start in range(0, len(samples), window):
+                chunk = samples[start:start + window]
+                rms = math.sqrt(
+                    sum(sample * sample for sample in chunk) / max(1, len(chunk))
+                )
+                if rms > threshold:
+                    active.append(start)
+            if not active:
+                raise AutoEditorError(f"Narration WAV chỉ có silence: {audio_path.name}")
+            keep = round(
+                parameters.framerate * config.audio.narration_edge_silence_ms / 1000.0
+            )
+            first = max(0, active[0] - keep)
+            last = min(len(samples), active[-1] + window + keep)
+            trimmed = samples[first:last]
+            if sys.byteorder != "little":
+                trimmed.byteswap()
+            with wave.open(str(temporary), "wb") as output:
+                output.setparams(parameters)
+                output.writeframes(trimmed.tobytes())
+            os.replace(temporary, audio_path)
+        finally:
+            if temporary.is_file():
+                temporary.unlink()
+
+
+def build_source_audio_mix(
+    clips: Sequence[SourceAudioClip], destination: Path,
+    total_duration: float, config: AppConfig,
+) -> bool:
+    if not config.audio.preserve_source_audio or not clips:
+        return False
+    if total_duration <= 0 or any(clip.duration <= 0 or clip.start < 0 for clip in clips):
+        raise AutoEditorError("Source-audio clip duration/start không hợp lệ.")
+    command = [config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    for clip in clips:
+        command.extend(["-i", str(clip.path)])
+    filters: list[str] = []
+    labels: list[str] = []
+    for index, clip in enumerate(clips):
+        fade = min(config.audio.source_audio_fade_ms / 1000.0, clip.duration / 2.0)
+        fade_out_start = max(0.0, clip.duration - fade)
+        delay_ms = round(clip.start * 1000.0)
+        label = f"sfx{index}"
+        labels.append(f"[{label}]")
+        chain = (
+            f"[{index}:a:0]atrim=start=0:duration={clip.duration:.6f},"
+            "asetpts=PTS-STARTPTS,"
+            f"aresample={config.audio.mix_sample_rate},"
+            f"aformat=sample_fmts=fltp:sample_rates={config.audio.mix_sample_rate}:"
+            "channel_layouts=stereo,"
+            f"volume={config.audio.source_audio_gain_db:.3f}dB"
+        )
+        if fade > 0:
+            chain += (
+                f",afade=t=in:st=0:d={fade:.6f},"
+                f"afade=t=out:st={fade_out_start:.6f}:d={fade:.6f}"
+            )
+        chain += f",adelay={delay_ms}:all=1[{label}]"
+        filters.append(chain)
+    if len(labels) == 1:
+        base = labels[0]
+    else:
+        filters.append(
+            f"{''.join(labels)}amix=inputs={len(labels)}:"
+            "duration=longest:dropout_transition=0:normalize=0[sfxbase]"
+        )
+        base = "[sfxbase]"
+    filters.append(
+        f"{base}apad=whole_dur={total_duration:.6f},"
+        f"atrim=duration={total_duration:.6f}[sfx]"
+    )
+    command.extend([
+        "-filter_complex", ";".join(filters), "-map", "[sfx]",
+        "-ar", str(config.audio.mix_sample_rate), "-ac", "2",
+        "-c:a", "pcm_s16le", str(destination),
+    ])
+    run_media_command(command, "tạo source-video SFX master")
+    return True
 
 
 def prepare_video_scene(
@@ -151,6 +268,7 @@ def concat_audio_scenes(
 def render_final_video(
     video_path: Path, audio_path: Path, ass_path: Path,
     temporary_output: Path, config: AppConfig,
+    source_audio_path: Path | None = None,
 ) -> None:
     video = config.video
     subtitle_filter = (
@@ -160,13 +278,44 @@ def render_final_video(
     command = [
         config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(video_path), "-i", str(audio_path),
-        "-map", "0:v:0", "-map", "1:a:0", "-vf", subtitle_filter,
+    ]
+    if source_audio_path is not None:
+        command.extend(["-i", str(source_audio_path)])
+        command.extend([
+            "-filter_complex",
+            (
+                f"[1:a:0]aresample={config.audio.mix_sample_rate},"
+                "aformat=sample_fmts=fltp:channel_layouts=mono,"
+                "pan=stereo|c0=0.707107*c0|c1=0.707107*c0[voice];"
+                f"[2:a:0]aresample={config.audio.mix_sample_rate},"
+                f"aformat=sample_fmts=fltp:sample_rates={config.audio.mix_sample_rate}:"
+                "channel_layouts=stereo[sfx];"
+                "[voice][sfx]amix=inputs=2:duration=first:"
+                "dropout_transition=0:normalize=0,"
+                f"loudnorm=I={config.audio.target_lufs}:"
+                f"TP={config.audio.true_peak_db}:LRA={config.audio.lra}[mixed]"
+            ),
+            "-map", "0:v:0", "-map", "[mixed]",
+        ])
+    else:
+        command.extend([
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-af",
+            (
+                f"aresample={config.audio.mix_sample_rate},"
+                "aformat=sample_fmts=fltp:channel_layouts=mono,"
+                "pan=stereo|c0=0.707107*c0|c1=0.707107*c0"
+            ),
+        ])
+    command.extend([
+        "-vf", subtitle_filter,
         "-c:v", video.codec, "-crf", str(video.crf), "-preset", video.preset,
         "-pix_fmt", "yuv420p", "-color_range", "tv", "-colorspace", "bt709",
         "-color_primaries", "bt709", "-color_trc", "bt709",
         "-x264-params", "range=limited:colorprim=bt709:transfer=bt709:colormatrix=bt709",
         "-r", str(video.fps),
+        "-ar", str(config.audio.mix_sample_rate), "-ac", "2",
         "-c:a", "aac", "-b:a", config.audio.aac_bitrate,
         "-movflags", "+faststart", "-shortest", str(temporary_output),
-    ]
+    ])
     run_media_command(command, "burn subtitle và render video cuối")

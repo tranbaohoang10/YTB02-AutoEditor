@@ -14,8 +14,8 @@ Pipeline:
 - Không có proportional character/word fallback. Alignment fail là explicit và có diagnostics trong `work/alignment/`.
 - Audio scene được tạo trước và đo bằng ffprobe. Visual scene bám đúng measured WAV duration.
 - English mặc định `am_eric`, Vietnamese mặc định `hung_thinh`, speed mặc định `1.08`.
-- Loudness mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source video audio không được dùng.
-- Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC.
+- Loudness narration mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source-video audio được mix làm SFX nền ở gain mặc định `-18 dB`.
+- Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC stereo 48 kHz.
 - Mỗi build thành công tạo `FINAL_VIDEO_<số>.mp4` mới theo số lớn nhất hiện có + 1; video cũ không bị ghi đè. Tên được giữ trước khi FFmpeg render để giảm nguy cơ collision giữa các build đồng thời.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
@@ -187,7 +187,7 @@ AI motion phải opt-in rõ ràng:
 
 Adapter dùng official Google GenAI client và `GEMINI_API_KEY`; `GEMINI_VIDEO_MODEL` có thể override model. AI I2V có thể tốn quota/credit và có thể thay đổi chi tiết ảnh dù prompt yêu cầu motion nhẹ/preserve composition. Nếu `ai_fallback_local=true`, lỗi provider sẽ fallback local; nếu false, lỗi là explicit. `auto` vẫn chọn local, không silently gọi AI.
 
-## Backward compatibility video-only
+## Backward compatibility với video input
 
 Script V1 tiếp tục hoạt động:
 
@@ -202,7 +202,25 @@ Script V1 tiếp tục hoạt động:
 }
 ```
 
-Copy clip vào `input\videos`. Clip dài hơn narration bị trim; clip ngắn hơn được freeze frame cuối. Video được scale giữ tỷ lệ, pad về canvas và bỏ audio gốc.
+Copy clip vào `input\videos`. Clip dài hơn narration bị trim; clip ngắn hơn được freeze frame cuối. Video được scale giữ tỷ lệ và pad về canvas. Nếu clip có audio stream, pipeline lấy phần audio trong thời lượng thật của clip, fade in/out nhẹ và mix làm ambient/transition/paper/whoosh SFX; audio không loop khi phần hình bị freeze. Clip không có audio vẫn build bình thường.
+
+Các mặc định audio quan trọng trong `config.json`:
+
+```json
+{
+  "audio": {
+    "sample_rate": 24000,
+    "mix_sample_rate": 48000,
+    "gap_ms": 0,
+    "narration_edge_silence_ms": 50,
+    "preserve_source_audio": true,
+    "source_audio_gain_db": -18.0,
+    "source_audio_fade_ms": 120
+  }
+}
+```
+
+`sample_rate` là chuẩn WAV Kokoro/WhisperX. `mix_sample_rate` là chuẩn final mix. Pipeline chỉ bỏ padding silence ở mép đầu/cuối WAV narration, giữ nguyên pause nằm bên trong; với `gap_ms=0`, boundary hai scene còn khoảng 100–150 ms edge silence theo mặc định.
 
 ## Setup và thao tác Windows
 
@@ -280,7 +298,7 @@ Rerun chỉ dọn intermediate build folders trong `work`; không xóa input cli
 
 ## Forced alignment và subtitle
 
-Kokoro tạo WAV riêng từng scene. WhisperX forced-align WAV với exact `scene.text`; model được load một lần cho language/run. Missing/extra/non-monotonic/out-of-duration word đều fail và ghi `work/alignment/scene_XXX.json`. Rolling cues chỉ reveal word tại aligned start. Canonical punctuation và Unicode Vietnamese được giữ nguyên.
+Kokoro tạo WAV riêng từng scene. Sau khi chỉ trim padding ở hai mép, pipeline đo lại WAV và WhisperX forced-align chính WAV narration đó với exact `scene.text`; source SFX/mixed final không bao giờ được dùng để alignment. Model được load một lần cho language/run. Missing/extra/non-monotonic/out-of-duration word đều fail và ghi `work/alignment/scene_XXX.json`. Rolling cues chỉ reveal word tại aligned start. Canonical punctuation và Unicode Vietnamese được giữ nguyên.
 
 ## Developer checks
 

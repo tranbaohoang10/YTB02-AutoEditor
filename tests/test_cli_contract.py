@@ -7,8 +7,11 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from src.models import AutoEditorError, Scene, Script, VisualSettings
+from src.config import load_config
+from src.image_assets import VisualAsset
+from src.models import AutoEditorError, Scene, Script, TimelineEntry, VisualSettings
 from src.pipeline import (
+    _collect_source_audio_clips,
     _parser,
     atomic_replace_final,
     latest_final_video_path,
@@ -62,6 +65,25 @@ class CLIContractTests(unittest.TestCase):
             with self.assertRaisesRegex(AutoEditorError, "GEMINI_API_KEY"):
                 run_pipeline(Path("script.json"), Path(__file__).resolve().parents[1] / "config.json", True)
         resolve.assert_not_called()
+
+    def test_source_audio_collection_skips_silent_video_and_does_not_loop_short_audio(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = load_config(root / "config.json")
+        first = Scene(1, "with.mp4", "First")
+        second = Scene(2, "silent.mp4", "Second")
+        timeline = (
+            TimelineEntry(first, Path("first.wav"), 2.0, 0.0, 2.0),
+            TimelineEntry(second, Path("second.wav"), 2.0, 2.0, 4.0),
+        )
+        assets = {
+            1: VisualAsset("video", Path("with.mp4")),
+            2: VisualAsset("video", Path("silent.mp4")),
+        }
+        with patch("src.pipeline.probe_audio_duration", side_effect=(0.6, None)):
+            clips = _collect_source_audio_clips(timeline, assets, config)
+        self.assertEqual(len(clips), 1)
+        self.assertEqual(clips[0].start, 0.0)
+        self.assertEqual(clips[0].duration, 0.6)
 
     def test_numbered_final_starts_at_one_for_empty_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

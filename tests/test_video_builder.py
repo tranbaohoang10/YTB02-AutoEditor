@@ -1,5 +1,7 @@
+import struct
 import tempfile
 import unittest
+import wave
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -7,8 +9,9 @@ from unittest.mock import patch
 from src.config import load_config
 from src.layered_manifest import SceneTransition
 from src.video_builder import (
-    concat_audio_scenes, concat_video_scenes_with_transitions, prepare_video_scene,
-    render_final_video,
+    SourceAudioClip, build_source_audio_mix, concat_audio_scenes,
+    concat_video_scenes_with_transitions, prepare_video_scene, render_final_video,
+    trim_narration_padding,
 )
 
 
@@ -55,6 +58,85 @@ class VideoBuilderTests(unittest.TestCase):
         self.assertNotIn("-af", command)
         self.assertFalse(any("loudnorm" in item for item in command))
 
+    def test_zero_gap_concat_has_no_hidden_silence_input(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ):
+            root = Path(directory)
+            concat_audio_scenes(
+                (root / "scene_001.wav", root / "scene_002.wav"),
+                root / "voice.wav", config, root,
+            )
+            concat_text = (root / "audio_concat.txt").read_text(encoding="utf-8")
+        self.assertIn("scene_001.wav", concat_text)
+        self.assertIn("scene_002.wav", concat_text)
+        self.assertNotIn("gap.wav", concat_text)
+
+    def test_narration_trim_targets_only_leading_and_trailing_padding(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = (root / "scene_001.wav", root / "scene_002.wav")
+            for path in paths:
+                samples = (
+                    [0] * 7200 + [10000] * 7200 + [0] * 4800
+                    + [10000] * 7200 + [0] * 14400
+                )
+                with wave.open(str(path), "wb") as output:
+                    output.setnchannels(1)
+                    output.setsampwidth(2)
+                    output.setframerate(config.audio.sample_rate)
+                    output.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+            trim_narration_padding(paths, config)
+            with wave.open(str(paths[0]), "rb") as trimmed:
+                frames = trimmed.readframes(trimmed.getnframes())
+                duration = trimmed.getnframes() / trimmed.getframerate()
+            samples_after = struct.unpack(f"<{len(frames) // 2}h", frames)
+        self.assertLessEqual(duration, 0.92)
+        self.assertGreaterEqual(duration, 0.88)
+        longest_zero_run = 0
+        current_zero_run = 0
+        for sample in samples_after:
+            if sample == 0:
+                current_zero_run += 1
+                longest_zero_run = max(longest_zero_run, current_zero_run)
+            else:
+                current_zero_run = 0
+        self.assertGreaterEqual(longest_zero_run, 4800)
+
+    def test_source_audio_mix_trims_fades_delays_and_never_loops(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            created = build_source_audio_mix(
+                (SourceAudioClip(root / "flow.mp4", 1.5, 1.0),),
+                root / "source_sfx.wav", 4.0, config,
+            )
+        self.assertTrue(created)
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("atrim=start=0:duration=1.000000", graph)
+        self.assertIn("volume=-18.000dB", graph)
+        self.assertIn("afade=t=in:st=0:d=0.120000", graph)
+        self.assertIn("afade=t=out:st=0.880000:d=0.120000", graph)
+        self.assertIn("adelay=1500:all=1", graph)
+        self.assertIn("apad=whole_dur=4.000000", graph)
+        self.assertNotIn("aloop", graph)
+
+    def test_empty_source_audio_mix_is_optional(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            self.assertFalse(
+                build_source_audio_mix((), root / "source_sfx.wav", 2.0, config)
+            )
+        run.assert_not_called()
+
     def test_all_transition_presets_map_to_ffmpeg_xfade_and_preserve_offsets(self) -> None:
         config = load_config(ROOT / "config.json")
         transitions = ("crossfade", "paper_wipe", "push_left", "push_right", "zoom_fade")
@@ -100,6 +182,33 @@ class VideoBuilderTests(unittest.TestCase):
         self.assertEqual(command[command.index("-color_range") + 1], "tv")
         self.assertEqual(command[command.index("-colorspace") + 1], "bt709")
         self.assertIn("format=yuv420p,setparams=range=tv", command[command.index("-vf") + 1])
+        self.assertEqual(command[command.index("-ar") + 1], "48000")
+        self.assertEqual(command[command.index("-ac") + 1], "2")
+        self.assertIn(
+            "pan=stereo|c0=0.707107*c0|c1=0.707107*c0",
+            command[command.index("-af") + 1],
+        )
+
+    def test_final_mix_keeps_narration_primary_and_adds_source_sfx(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            sfx = root / "source_sfx.wav"
+            render_final_video(
+                root / "video.mp4", root / "voice.wav", root / "subtitle.ass",
+                root / "final.mp4", config, sfx,
+            )
+        command = run.call_args.args[0]
+        inputs = [command[index + 1] for index, item in enumerate(command) if item == "-i"]
+        self.assertEqual(inputs[-1], str(sfx))
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("[voice][sfx]amix=inputs=2:duration=first", graph)
+        self.assertIn("normalize=0", graph)
+        self.assertIn("loudnorm=I=-18.0:TP=-1.5:LRA=7.0[mixed]", graph)
+        self.assertIn("pan=stereo|c0=0.707107*c0|c1=0.707107*c0[voice]", graph)
+        self.assertNotIn("volume=", graph.split("[voice]")[0])
 
 
 if __name__ == "__main__":
