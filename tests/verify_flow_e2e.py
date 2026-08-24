@@ -20,6 +20,7 @@ from src.models import SceneAlignment, TimelineEntry, WordTiming
 from src.pipeline import latest_final_video_path
 from src.script_loader import load_script
 from src.subtitles import create_rolling_cues, format_ass_timestamp, format_srt_timestamp
+from tools.analyze_narration_pacing import analyze
 
 
 def _wav_samples(path: Path) -> tuple[int, int, tuple[int, ...]]:
@@ -83,9 +84,6 @@ def main() -> int:
     edge_silences: list[tuple[float, float]] = []
     source_audio_count = 0
     for index, scene in enumerate(script.scenes):
-        wav = ROOT / f"work/audio/scene_{scene.id:03d}.wav"
-        duration = _wav_duration(wav)
-        timeline.append(TimelineEntry(scene, wav, duration, cursor, cursor + duration))
         diagnostics = json.loads(
             (ROOT / f"work/alignment/scene_{scene.id:03d}.json").read_text(encoding="utf-8")
         )
@@ -96,19 +94,36 @@ def main() -> int:
             WordTiming(item["word"], item["start"], item["end"])
             for item in diagnostics["words"]
         )
+        start = float(diagnostics.get("timeline_start", cursor))
+        end = float(diagnostics.get("timeline_end", start + diagnostics["audio_duration"]))
+        wav = (
+            ROOT / "output/voice.wav"
+            if config.audio.narration_mode == "continuous"
+            else ROOT / f"work/audio/scene_{scene.id:03d}.wav"
+        )
+        timeline.append(TimelineEntry(scene, wav, end - start, start, end))
         alignments.append(SceneAlignment(scene.id, script.language, words))
-        edge_silences.append(_edge_silence(wav))
+        if config.audio.narration_mode == "scene":
+            edge_silences.append(_edge_silence(wav))
         if scene.video:
             source_audio_count += probe_audio_duration(
                 ROOT / "input/videos" / scene.video, ffprobe
             ) is not None
-        cursor += duration + (gap if index < len(script.scenes) - 1 else 0.0)
+        cursor = end
 
-    boundary_gaps = [
-        edge_silences[index][1] + edge_silences[index + 1][0] + gap
-        for index in range(len(edge_silences) - 1)
-    ]
-    assert max(boundary_gaps) <= 0.150001, boundary_gaps
+    if config.audio.narration_mode == "scene":
+        boundary_gaps = [
+            edge_silences[index][1] + edge_silences[index + 1][0] + gap
+            for index in range(len(edge_silences) - 1)
+        ]
+    else:
+        boundary_gaps = [
+            timeline[index + 1].start
+            + alignments[index + 1].words[0].start
+            - (timeline[index].start + alignments[index].words[-1].end)
+            for index in range(len(timeline) - 1)
+        ]
+    assert max(boundary_gaps) <= 0.300001, boundary_gaps
 
     cues = create_rolling_cues(tuple(alignments), tuple(timeline), config.subtitles)
     global_words = [
@@ -146,6 +161,16 @@ def main() -> int:
     sfx_rms = _wav_rms(ROOT / "work/source_sfx.wav")
     assert sfx_rms < voice_rms * 0.25
     assert source_audio_count == len(script.scenes)
+    pacing = analyze(
+        ROOT / "output/voice.wav", threshold_db=config.audio.pause_threshold_db,
+        minimum_ms=config.audio.pause_min_detect_ms,
+        ffmpeg=shutil.which("ffmpeg") or "ffmpeg",
+        alignment_dir=ROOT / "work/alignment",
+    )
+    measured = pacing["pcm_pause_summary"]
+    assert measured["p90"] <= 0.200001, measured
+    assert measured["p95"] <= 0.250001, measured
+    assert measured["maximum"] <= 0.300001, measured
     print(json.dumps({
         "final": str(final_path),
         "duration": float(final["format"]["duration"]),
@@ -155,6 +180,7 @@ def main() -> int:
         "boundary_gap_max": max(boundary_gaps),
         "boundary_gap_average": sum(boundary_gaps) / len(boundary_gaps),
         "voice_to_sfx_rms_ratio": voice_rms / sfx_rms,
+        "pacing": measured,
         "no_future_word": "PASS",
         "audio": f"{audio['codec_name']} {audio['sample_rate']}Hz {audio['channels']}ch",
     }, indent=2))

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.alignment import (
+    align_continuous_narration,
     align_timeline,
     canonical_words,
     to_global_words,
@@ -141,6 +142,56 @@ class AlignmentTests(unittest.TestCase):
             results = align_timeline(scenes, "en", config(Path(directory)), Path(directory) / "out", engine)
         self.assertEqual(len(results), 2)
         self.assertEqual(engine.calls, 2)
+
+    def test_continuous_alignment_maps_every_word_to_one_scene(self) -> None:
+        scenes = (
+            Scene(1, "a.mp4", "One two."),
+            Scene(2, "b.mp4", "Three four."),
+        )
+        raw = [
+            {"word": "One", "start": 0.05, "end": 0.25},
+            {"word": "two", "start": 0.30, "end": 0.55},
+            {"word": "Three", "start": 0.68, "end": 0.90},
+            {"word": "four", "start": 0.95, "end": 1.20},
+        ]
+        engine = FakeEngine(raw)
+        with tempfile.TemporaryDirectory() as directory:
+            timeline, alignments = align_continuous_narration(
+                scenes, Path("voice.wav"), 1.30, "en", config(Path(directory)),
+                Path(directory) / "alignment", engine,
+            )
+        self.assertEqual(engine.calls, 1)
+        self.assertEqual([word.word for word in alignments[0].words], ["One", "two."])
+        self.assertEqual([word.word for word in alignments[1].words], ["Three", "four."])
+        self.assertAlmostEqual(timeline[1].start, 0.68)
+        self.assertAlmostEqual(alignments[1].words[0].start, 0.0)
+        self.assertEqual(
+            sum(len(alignment.words) for alignment in alignments),
+            sum(len(canonical_words(scene.text)) for scene in scenes),
+        )
+
+    def test_continuous_alignment_diagnostics_preserve_scene_ownership(self) -> None:
+        scenes = (Scene(1, "a.mp4", "One."), Scene(2, "b.mp4", "Two."))
+        raw = [
+            {"word": "One", "start": 0.02, "end": 0.30},
+            {"word": "Two", "start": 0.42, "end": 0.75},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            align_continuous_narration(
+                scenes, Path("voice.wav"), 0.85, "en", config(root),
+                root / "alignment", FakeEngine(raw),
+            )
+            master = json.loads(
+                (root / "alignment" / "continuous_master.json").read_text(encoding="utf-8")
+            )
+            first = json.loads(
+                (root / "alignment" / "scene_001.json").read_text(encoding="utf-8")
+            )
+        self.assertEqual(master["scene_word_counts"], {"1": 1, "2": 1})
+        self.assertEqual(master["canonical_count"], master["aligned_count"])
+        self.assertEqual(first["timeline_start"], 0.0)
+        self.assertEqual(first["timeline_end"], 0.42)
 
     def test_failed_alignment_writes_diagnostics_and_raises_clear_error(self) -> None:
         scene = TimelineEntry(

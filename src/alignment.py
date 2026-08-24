@@ -11,6 +11,7 @@ from typing import Any, Protocol, Sequence
 from .config import AlignmentConfig
 from .models import (
     AutoEditorError,
+    Scene,
     SceneAlignment,
     TimelineEntry,
     WordTiming,
@@ -214,6 +215,8 @@ def _write_diagnostics(
         "status": status,
         "canonical_text": entry.scene.text,
         "audio_duration": round(entry.duration, 6),
+        "timeline_start": round(entry.start, 6),
+        "timeline_end": round(entry.end, 6),
         "aligned_count": len(words),
         "canonical_count": _canonical_count(entry.scene.text),
         "words": [
@@ -279,3 +282,114 @@ def align_timeline(
                 f"See {diagnostics_path}\nReason: {exc}"
             ) from exc
     return tuple(results)
+
+
+def align_continuous_narration(
+    scenes: Sequence[Scene], audio_path: Path, audio_duration: float,
+    language: str, config: AlignmentConfig, alignment_dir: Path,
+    engine: AlignmentEngine | None = None,
+) -> tuple[tuple[TimelineEntry, ...], tuple[SceneAlignment, ...]]:
+    """Align one canonical narration master and map every word to one scene."""
+    if config.allow_approximate_fallback:
+        raise AutoEditorError(
+            "Approximate alignment fallback không được triển khai; "
+            "hãy đặt allow_approximate_fallback=false."
+        )
+    if not scenes:
+        raise AutoEditorError("Continuous narration cần ít nhất một scene.")
+    alignment_dir.mkdir(parents=True, exist_ok=True)
+    full_text = " ".join(scene.text for scene in scenes)
+    active_engine = engine or WhisperXAlignmentEngine(language, config)
+    raw_words: Sequence[dict[str, Any]] = []
+    try:
+        raw_words = active_engine.align(audio_path, full_text, audio_duration)
+        global_words = validate_and_map_words(
+            full_text, raw_words, audio_duration, config.duration_tolerance
+        )
+    except AutoEditorError as exc:
+        (alignment_dir / "continuous_master.json").write_text(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "canonical_text": full_text,
+                    "audio_duration": round(audio_duration, 6),
+                    "canonical_count": _canonical_count(full_text),
+                    "error": str(exc),
+                    "raw_words": list(raw_words),
+                },
+                ensure_ascii=False,
+                indent=2,
+                default=lambda value: value.item() if hasattr(value, "item") else str(value),
+            ),
+            encoding="utf-8",
+        )
+        raise AutoEditorError(
+            "Word alignment failed for continuous narration. "
+            f"See {alignment_dir / 'continuous_master.json'}\nReason: {exc}"
+        ) from exc
+
+    owned: list[tuple[WordTiming, ...]] = []
+    cursor = 0
+    for scene in scenes:
+        count = len(canonical_words(scene.text))
+        words = tuple(global_words[cursor:cursor + count])
+        if len(words) != count:
+            raise AutoEditorError(
+                f"Continuous alignment thiếu word cho scene {scene.id:02d}."
+            )
+        owned.append(words)
+        cursor += count
+    if cursor != len(global_words):
+        raise AutoEditorError("Continuous alignment còn word chưa có scene ownership.")
+
+    starts = [0.0]
+    starts.extend(words[0].start for words in owned[1:])
+    ends = [*starts[1:], audio_duration]
+    timeline: list[TimelineEntry] = []
+    alignments: list[SceneAlignment] = []
+    for scene, words, start, end in zip(scenes, owned, starts, ends):
+        if end <= start or words[-1].end > end + config.duration_tolerance:
+            raise AutoEditorError(
+                f"Continuous scene {scene.id:02d} có timing không hợp lệ "
+                f"({start:.3f}..{end:.3f})."
+            )
+        entry = TimelineEntry(scene, audio_path, end - start, start, end)
+        relative = tuple(
+            WordTiming(word.word, word.start - start, word.end - start)
+            for word in words
+        )
+        alignment = SceneAlignment(scene.id, language, relative)
+        timeline.append(entry)
+        alignments.append(alignment)
+        _write_diagnostics(
+            alignment_dir / f"scene_{scene.id:03d}.json",
+            entry, language, "ok", relative,
+        )
+
+    (alignment_dir / "continuous_master.json").write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "canonical_text": full_text,
+                "audio_duration": round(audio_duration, 6),
+                "canonical_count": len(global_words),
+                "aligned_count": len(global_words),
+                "scene_count": len(scenes),
+                "scene_word_counts": {
+                    str(scene.id): len(words) for scene, words in zip(scenes, owned)
+                },
+                "words": [
+                    {
+                        "word": word.word,
+                        "start": round(word.start, 6),
+                        "end": round(word.end, 6),
+                    }
+                    for word in global_words
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return tuple(timeline), tuple(alignments)

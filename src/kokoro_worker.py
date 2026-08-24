@@ -101,8 +101,14 @@ def main() -> int:
                 )
             if audio.size == 0:
                 raise RuntimeError(f"Kokoro trả về audio rỗng cho scene {scene['id']}.")
-            sf.write(args.output_dir / f"scene_{int(scene['id']):03d}.wav", audio, args.sample_rate)
-            print(f"scene {int(scene['id']):03d}: {audio.size / args.sample_rate:.3f}s", flush=True)
+            output_name = str(scene.get("output", f"scene_{int(scene['id']):03d}.wav"))
+            if Path(output_name).name != output_name or Path(output_name).suffix.lower() != ".wav":
+                raise RuntimeError(f"Tên output TTS không an toàn: {output_name!r}")
+            sf.write(args.output_dir / output_name, audio, args.sample_rate)
+            print(
+                f"chunk {int(scene['id']):03d}: {audio.size / args.sample_rate:.3f}s",
+                flush=True,
+            )
         return 0
     except Exception as exc:
         print(f"Kokoro worker error: {exc}", file=sys.stderr)

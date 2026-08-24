@@ -16,6 +16,7 @@ from src.pipeline import (
     atomic_replace_final,
     latest_final_video_path,
     main,
+    quantize_visual_durations,
     reserve_final_video_path,
     run_pipeline,
 )
@@ -84,6 +85,20 @@ class CLIContractTests(unittest.TestCase):
         self.assertEqual(len(clips), 1)
         self.assertEqual(clips[0].start, 0.0)
         self.assertEqual(clips[0].duration, 0.6)
+
+    def test_visual_frame_quantization_has_no_cumulative_duration_drift(self) -> None:
+        scenes = tuple(Scene(index, f"{index}.mp4", "Text") for index in range(1, 4))
+        timeline = (
+            TimelineEntry(scenes[0], Path("voice.wav"), 1.011, 0.0, 1.011),
+            TimelineEntry(scenes[1], Path("voice.wav"), 1.011, 1.011, 2.022),
+            TimelineEntry(scenes[2], Path("voice.wav"), 1.011, 2.022, 3.033),
+        )
+        durations = quantize_visual_durations(timeline, 30)
+        self.assertGreaterEqual(sum(durations), timeline[-1].end)
+        self.assertLess(sum(durations) - timeline[-1].end, 1 / 30)
+        self.assertTrue(
+            all(abs(duration * 30 - round(duration * 30)) < 1e-9 for duration in durations)
+        )
 
     def test_numbered_final_starts_at_one_for_empty_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
