@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import re
 import shutil
@@ -8,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .alignment import align_timeline
+from .alignment import align_continuous_narration, align_timeline
 from .config import AppConfig, load_config
 from .ffmpeg_utils import probe_audio_duration, probe_duration, require_executable
 from .image_assets import VisualAsset, resolve_visual_assets
@@ -28,8 +29,8 @@ from .video_builder import (
     concat_video_scenes,
     concat_video_scenes_with_transitions,
     prepare_video_scene,
+    process_narration_audio,
     render_final_video,
-    trim_narration_padding,
 )
 
 
@@ -120,12 +121,17 @@ def _prepare_scenes(
     timeline: tuple[TimelineEntry, ...], assets: dict[int, VisualAsset],
     scenes_dir: Path, motion_dir: Path, config: AppConfig,
     motion_mode: str, *, ai_provider: Any = None, fallback_local: bool = False,
+    visual_durations: tuple[float, ...] | None = None,
 ) -> list[Path]:
     results: list[Path] = []
     gap = config.audio.gap_ms / 1000.0
     for index, entry in enumerate(timeline):
         destination = scenes_dir / f"scene_{entry.scene.id:03d}.mp4"
-        target_duration = entry.duration + (gap if index < len(timeline) - 1 else 0.0)
+        target_duration = (
+            visual_durations[index]
+            if visual_durations is not None
+            else entry.duration + (gap if index < len(timeline) - 1 else 0.0)
+        )
         asset = assets[entry.scene.id]
         print(f"       Scene {entry.scene.id:02d} {asset.kind} -> {target_duration:.2f} sec")
         if asset.kind == "video":
@@ -145,6 +151,29 @@ def _prepare_scenes(
             shutil.copy2(motion_output, destination)
         results.append(destination)
     return results
+
+
+def quantize_visual_durations(
+    timeline: tuple[TimelineEntry, ...], fps: int,
+) -> tuple[float, ...]:
+    """Quantize cumulative cuts, avoiding per-scene rounding drift.
+
+    Intermediate boundaries use nearest-frame timing. The final boundary uses
+    ceil so the visual master can never truncate the audio master.
+    """
+    if not timeline or fps <= 0:
+        raise AutoEditorError("Timeline/FPS không hợp lệ khi lượng tử hóa scene.")
+    frame_boundaries = [0]
+    for index, entry in enumerate(timeline):
+        raw = entry.end * fps
+        frame = math.ceil(raw - 1e-9) if index == len(timeline) - 1 else round(raw)
+        if frame <= frame_boundaries[-1]:
+            frame = frame_boundaries[-1] + 1
+        frame_boundaries.append(frame)
+    return tuple(
+        (right - left) / fps
+        for left, right in zip(frame_boundaries, frame_boundaries[1:])
+    )
 
 
 def _collect_source_audio_clips(
@@ -239,27 +268,49 @@ def run_pipeline(
     audio_dir, scenes_dir, motion_dir, alignment_dir = _clean_work_directory(work_dir)
 
     print("[4/10] Generating narration")
-    generate_narration(
+    narration_chunks = generate_narration(
         script, config.kokoro_python, PROJECT_ROOT / "src" / "kokoro_worker.py",
         audio_dir, work_dir, config.audio.sample_rate,
+        config.audio.narration_mode, config.audio.continuous_chunk_scenes,
     )
-    narration_paths = [audio_dir / f"scene_{scene.id:03d}.wav" for scene in script.scenes]
-    trim_narration_padding(narration_paths, config)
-    timeline = build_timeline(
-        script.scenes, audio_dir,
-        lambda path: probe_duration(path, config.ffprobe), config.audio.gap_ms,
+    narration_paths = [chunk.output_path for chunk in narration_chunks]
+    compression_reports = process_narration_audio(
+        narration_paths, config, work_dir / "diagnostics" / "pause_compression.json"
     )
-    for entry in timeline:
-        print(f"       Scene {entry.scene.id:02d} ... {entry.duration:.2f} sec")
+    print(
+        f"       Mode: {config.audio.narration_mode} | "
+        f"{len(narration_chunks)} TTS chunk(s) | "
+        f"{sum(item.removed_duration for item in compression_reports):.3f}s removed"
+    )
 
     print("[5/10] Building audio master timeline")
-    total = timeline[-1].end
-    print(f"       Total narration timeline: {total:.2f} sec")
+    voice_path = output_dir / "voice.wav"
+    concat_audio_scenes(narration_paths, voice_path, config, work_dir)
+    voice_duration = probe_duration(voice_path, config.ffprobe)
+    if config.audio.narration_mode == "continuous":
+        timeline: tuple[TimelineEntry, ...] = ()
+    else:
+        timeline = build_timeline(
+            script.scenes, audio_dir,
+            lambda path: probe_duration(path, config.ffprobe), config.audio.gap_ms,
+        )
+    for entry in timeline:
+        print(f"       Scene {entry.scene.id:02d} ... {entry.duration:.2f} sec")
+    print(f"       Total narration master: {voice_duration:.2f} sec")
 
     print("[6/10] Forced word alignment")
-    alignments = align_timeline(
-        timeline, script.language, config.alignment, alignment_dir
-    )
+    if config.audio.narration_mode == "continuous":
+        timeline, alignments = align_continuous_narration(
+            script.scenes, voice_path, voice_duration, script.language,
+            config.alignment, alignment_dir,
+        )
+        for entry in timeline:
+            print(f"       Scene {entry.scene.id:02d} ... {entry.duration:.2f} sec")
+    else:
+        alignments = align_timeline(
+            timeline, script.language, config.alignment, alignment_dir
+        )
+    total = timeline[-1].end
     for alignment in alignments:
         print(f"       Scene {alignment.scene_id:02d} ... {len(alignment.words)} words aligned")
 
@@ -274,10 +325,12 @@ def run_pipeline(
         ai_motion_provider = create_ai_motion_provider(
             script.visual.motion_provider, script.visual.motion_model
         )
+    visual_durations = quantize_visual_durations(timeline, config.video.fps)
     prepared = _prepare_scenes(
         timeline, assets, scenes_dir, motion_dir, config, selected_motion_mode,
         ai_provider=ai_motion_provider,
         fallback_local=script.visual.ai_fallback_local,
+        visual_durations=visual_durations,
     )
     joined_video = work_dir / "joined_video.mp4"
     transitions: list[SceneTransition] = []
@@ -288,18 +341,12 @@ def run_pipeline(
         else:
             transitions.append(SceneTransition())
     if any(transition.type != "none" for transition in transitions):
-        durations = [
-            entry.duration + (config.audio.gap_ms / 1000.0 if index < len(timeline) - 1 else 0.0)
-            for index, entry in enumerate(timeline)
-        ]
         concat_video_scenes_with_transitions(
-            prepared, durations, transitions, joined_video, config
+            prepared, visual_durations, transitions, joined_video, config
         )
     else:
         concat_video_scenes(prepared, joined_video, config, work_dir)
-    print("[8/10] Concatenating and normalizing narration")
-    voice_path = output_dir / "voice.wav"
-    concat_audio_scenes([entry.audio_path for entry in timeline], voice_path, config, work_dir)
+    print("[8/10] Mixing source-video SFX")
     source_audio_clips = _collect_source_audio_clips(timeline, assets, config)
     source_sfx_path = work_dir / "source_sfx.wav"
     has_source_sfx = build_source_audio_mix(

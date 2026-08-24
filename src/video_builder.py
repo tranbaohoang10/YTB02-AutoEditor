@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import sys
@@ -13,6 +14,7 @@ from .config import AppConfig
 from .ffmpeg_utils import ffmpeg_filter_path, run_media_command, write_concat_file
 from .layered_manifest import SceneTransition
 from .models import AutoEditorError
+from .narration import PauseCompressionReport, compress_smart_pauses
 
 
 _XFADE_TRANSITIONS = {
@@ -79,6 +81,40 @@ def trim_narration_padding(
         finally:
             if temporary.is_file():
                 temporary.unlink()
+
+
+def process_narration_audio(
+    audio_paths: Sequence[Path], config: AppConfig,
+    diagnostics_path: Path | None = None,
+) -> tuple[PauseCompressionReport, ...]:
+    """Trim generated edges, then compress only eligible internal pauses."""
+    trim_narration_padding(audio_paths, config)
+    reports: tuple[PauseCompressionReport, ...] = ()
+    if config.audio.smart_pause_compression:
+        reports = tuple(
+            compress_smart_pauses(audio_path, config.audio)
+            for audio_path in audio_paths
+        )
+    if diagnostics_path is not None:
+        diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics_path.write_text(
+            json.dumps(
+                {
+                    "enabled": config.audio.smart_pause_compression,
+                    "files": [report.as_dict() for report in reports],
+                    "total_removed_seconds": round(
+                        sum(report.removed_duration for report in reports), 6
+                    ),
+                    "compressed_pause_count": sum(
+                        report.compressed_pause_count for report in reports
+                    ),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return reports
 
 
 def build_source_audio_mix(

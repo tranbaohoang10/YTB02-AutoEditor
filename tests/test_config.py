@@ -28,6 +28,17 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(audio.preserve_source_audio)
         self.assertEqual(audio.source_audio_gain_db, -18.0)
         self.assertEqual(audio.source_audio_fade_ms, 120)
+        self.assertTrue(audio.smart_pause_compression)
+        self.assertEqual(audio.pause_threshold_db, -35.0)
+        self.assertEqual(audio.pause_min_detect_ms, 120)
+        self.assertEqual(audio.pause_medium_target_ms, 130)
+        self.assertEqual(audio.pause_long_target_ms, 160)
+        self.assertEqual(audio.pause_very_long_target_ms, 190)
+        self.assertEqual(audio.pause_edge_guard_ms, 25)
+        self.assertEqual(audio.pause_crossfade_ms, 8)
+        self.assertEqual(audio.narration_mode, "continuous")
+        self.assertEqual(audio.continuous_chunk_scenes, 5)
+        self.assertEqual(audio.scene_tail_ms, 100)
 
 
 if __name__ == "__main__":

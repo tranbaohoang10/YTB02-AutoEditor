@@ -117,6 +117,29 @@ class SubtitleTests(unittest.TestCase):
         self.assertIn("Before sunrise", srt)
         self.assertIn("Dialogue: 0,0:00:00.30,0:00:00.70", ass)
 
+    def test_continuous_scene_boundary_never_reveals_next_scene_early(self) -> None:
+        scenes = (
+            Scene(1, "a.mp4", "One ends."),
+            Scene(2, "b.mp4", "Next begins."),
+        )
+        timeline = (
+            TimelineEntry(scenes[0], Path("voice.wav"), 0.70, 0.0, 0.70),
+            TimelineEntry(scenes[1], Path("voice.wav"), 0.70, 0.70, 1.40),
+        )
+        alignments = (
+            SceneAlignment(1, "en", (
+                WordTiming("One", 0.05, 0.25), WordTiming("ends.", 0.30, 0.55),
+            )),
+            SceneAlignment(2, "en", (
+                WordTiming("Next", 0.0, 0.25), WordTiming("begins.", 0.30, 0.60),
+            )),
+        )
+        cues = create_rolling_cues(alignments, timeline, CONFIG)
+        before_boundary = [cue.text for cue in cues if cue.start < 0.70]
+        self.assertTrue(all("Next" not in text for text in before_boundary))
+        next_cue = next(cue for cue in cues if "Next" in cue.text)
+        self.assertGreaterEqual(next_cue.start, 0.70)
+
 
 if __name__ == "__main__":
     unittest.main()

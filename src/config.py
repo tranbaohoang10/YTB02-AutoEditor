@@ -26,6 +26,20 @@ class AudioConfig:
     gap_ms: int
     narration_edge_silence_ms: int
     narration_silence_threshold_db: float
+    smart_pause_compression: bool
+    pause_threshold_db: float
+    pause_min_detect_ms: int
+    pause_short_max_ms: int
+    pause_medium_max_ms: int
+    pause_long_max_ms: int
+    pause_medium_target_ms: int
+    pause_long_target_ms: int
+    pause_very_long_target_ms: int
+    pause_edge_guard_ms: int
+    pause_crossfade_ms: int
+    narration_mode: str
+    continuous_chunk_scenes: int
+    scene_tail_ms: int
     preserve_source_audio: bool
     source_audio_gain_db: float
     source_audio_fade_ms: int
@@ -96,6 +110,9 @@ def load_config(path: Path) -> AppConfig:
         preserve_source_audio = audio.get("preserve_source_audio", True)
         if not isinstance(preserve_source_audio, bool):
             raise TypeError("audio.preserve_source_audio phải là boolean")
+        smart_pause_compression = audio.get("smart_pause_compression", True)
+        if not isinstance(smart_pause_compression, bool):
+            raise TypeError("audio.smart_pause_compression phải là boolean")
         kokoro_python = Path(str(data["kokoro_python"]))
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
@@ -117,6 +134,22 @@ def load_config(path: Path) -> AppConfig:
                 narration_silence_threshold_db=float(
                     audio.get("narration_silence_threshold_db", -50.0)
                 ),
+                smart_pause_compression=smart_pause_compression,
+                pause_threshold_db=float(audio.get("pause_threshold_db", -35.0)),
+                pause_min_detect_ms=int(audio.get("pause_min_detect_ms", 120)),
+                pause_short_max_ms=int(audio.get("pause_short_max_ms", 180)),
+                pause_medium_max_ms=int(audio.get("pause_medium_max_ms", 350)),
+                pause_long_max_ms=int(audio.get("pause_long_max_ms", 700)),
+                pause_medium_target_ms=int(audio.get("pause_medium_target_ms", 130)),
+                pause_long_target_ms=int(audio.get("pause_long_target_ms", 160)),
+                pause_very_long_target_ms=int(
+                    audio.get("pause_very_long_target_ms", 190)
+                ),
+                pause_edge_guard_ms=int(audio.get("pause_edge_guard_ms", 25)),
+                pause_crossfade_ms=int(audio.get("pause_crossfade_ms", 8)),
+                narration_mode=str(audio.get("narration_mode", "scene")),
+                continuous_chunk_scenes=int(audio.get("continuous_chunk_scenes", 5)),
+                scene_tail_ms=int(audio.get("scene_tail_ms", 100)),
                 preserve_source_audio=preserve_source_audio,
                 source_audio_gain_db=float(audio.get("source_audio_gain_db", -18.0)),
                 source_audio_fade_ms=int(audio.get("source_audio_fade_ms", 120)),
@@ -157,6 +190,41 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("narration_edge_silence_ms phải trong khoảng 0..150 ms.")
     if not -90.0 <= result.audio.narration_silence_threshold_db <= -20.0:
         raise AutoEditorError("narration_silence_threshold_db phải trong khoảng -90..-20 dB.")
+    if not -90.0 <= result.audio.pause_threshold_db <= -20.0:
+        raise AutoEditorError("pause_threshold_db phải trong khoảng -90..-20 dB.")
+    if not 20 <= result.audio.pause_min_detect_ms <= 2000:
+        raise AutoEditorError("pause_min_detect_ms phải trong khoảng 20..2000 ms.")
+    if not (
+        0 < result.audio.pause_short_max_ms
+        < result.audio.pause_medium_max_ms
+        < result.audio.pause_long_max_ms
+    ):
+        raise AutoEditorError("Các ngưỡng pause short/medium/long phải tăng dần.")
+    targets = (
+        result.audio.pause_medium_target_ms,
+        result.audio.pause_long_target_ms,
+        result.audio.pause_very_long_target_ms,
+    )
+    if any(target <= 0 for target in targets):
+        raise AutoEditorError("Các pause target phải > 0 ms.")
+    if result.audio.pause_medium_target_ms >= result.audio.pause_medium_max_ms:
+        raise AutoEditorError("pause_medium_target_ms phải nhỏ hơn medium max.")
+    if result.audio.pause_long_target_ms >= result.audio.pause_long_max_ms:
+        raise AutoEditorError("pause_long_target_ms phải nhỏ hơn long max.")
+    if not 0 <= result.audio.pause_edge_guard_ms <= 100:
+        raise AutoEditorError("pause_edge_guard_ms phải trong khoảng 0..100 ms.")
+    if not 0 <= result.audio.pause_crossfade_ms <= 50:
+        raise AutoEditorError("pause_crossfade_ms phải trong khoảng 0..50 ms.")
+    if min(targets) < 2 * (
+        result.audio.pause_edge_guard_ms + result.audio.pause_crossfade_ms
+    ):
+        raise AutoEditorError("Pause target quá ngắn cho edge guard và crossfade.")
+    if result.audio.narration_mode not in {"scene", "continuous"}:
+        raise AutoEditorError("audio.narration_mode chỉ hỗ trợ 'scene' hoặc 'continuous'.")
+    if not 1 <= result.audio.continuous_chunk_scenes <= 30:
+        raise AutoEditorError("continuous_chunk_scenes phải trong khoảng 1..30.")
+    if not 0 <= result.audio.scene_tail_ms <= 500:
+        raise AutoEditorError("scene_tail_ms phải trong khoảng 0..500 ms.")
     if not -60.0 <= result.audio.source_audio_gain_db <= 0.0:
         raise AutoEditorError("source_audio_gain_db phải trong khoảng -60..0 dB.")
     if not 0 <= result.audio.source_audio_fade_ms <= 2000:

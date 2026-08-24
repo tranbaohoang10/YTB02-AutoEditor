@@ -4,7 +4,7 @@ YTB02 AutoEditor là pipeline dựng video local-first cho Windows. Project nh�
 
 Pipeline:
 
-`script` → layered collage / image motion / video source → Kokoro TTS → đo WAV thật → WhisperX forced alignment → rolling subtitle → FFmpeg assemble → `output/FINAL_VIDEO_<số>.mp4`
+`script` → Kokoro TTS → smart pause compression → đo WAV thật → WhisperX forced alignment → visual retiming → rolling subtitle → FFmpeg assemble/SFX mix → `output/FINAL_VIDEO_<số>.mp4`
 
 ## Invariant không thay đổi từ V1
 
@@ -12,7 +12,7 @@ Pipeline:
 - WhisperX chỉ cung cấp timestamp; pipeline không dùng ASR transcript thay script.
 - Future word không xuất hiện trước `word.start`; SRT/ASS luôn ceil timestamp.
 - Không có proportional character/word fallback. Alignment fail là explicit và có diagnostics trong `work/alignment/`.
-- Audio scene được tạo trước và đo bằng ffprobe. Visual scene bám đúng measured WAV duration.
+- Audio được tạo và nén pause trước khi đo/alignment. Visual scene bám timeline WAV hậu xử lý; cumulative frame quantization không được phép cắt ngắn audio master.
 - English mặc định `am_eric`, Vietnamese mặc định `hung_thinh`, speed mặc định `1.08`.
 - Loudness narration mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source-video audio được mix làm SFX nền ở gain mặc định `-18 dB`.
 - Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC stereo 48 kHz.
@@ -283,7 +283,7 @@ input/scenes/             layered scene assets của user
 input/sample-scenes/      sample paper-collage được track trong repo
 input/videos/             video source V1
 input/script.json         source of truth
-work/audio/               WAV từng scene
+work/audio/               WAV scene hoặc multi-scene chunk
 work/generated-images/    ảnh API + cache metadata
 work/motion/              image-motion clips
 work/alignment/           word timing diagnostics
@@ -296,9 +296,19 @@ output/FINAL_VIDEO_<số>.mp4
 
 Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images/layered assets, generated-image cache hoặc video final cũ. Chỉ file khớp chính xác `FINAL_VIDEO_<integer>.mp4` tham gia cấp số; các tên như `FINAL_VIDEO_backup.mp4` bị bỏ qua.
 
-## Forced alignment và subtitle
+## Nhịp narration, forced alignment và subtitle
 
-Kokoro tạo WAV riêng từng scene. Sau khi chỉ trim padding ở hai mép, pipeline đo lại WAV và WhisperX forced-align chính WAV narration đó với exact `scene.text`; source SFX/mixed final không bao giờ được dùng để alignment. Model được load một lần cho language/run. Missing/extra/non-monotonic/out-of-duration word đều fail và ghi `work/alignment/scene_XXX.json`. Rolling cues chỉ reveal word tại aligned start. Canonical punctuation và Unicode Vietnamese được giữ nguyên.
+`audio.narration_mode` hỗ trợ `scene` (tương thích one-WAV-per-scene) và `continuous`. Continuous gom nhiều scene ổn định theo `continuous_chunk_scenes`, nối thành một narration master, align một lần với toàn bộ canonical text rồi ánh xạ từng word trở lại đúng scene. Không có word bị mất, trùng ownership hoặc đổi text.
+
+`smart_pause_compression` chỉ cắt phần giữa của silence/near-silence PCM đủ dài. RMS detector có peak guard để bảo vệ consonant nhỏ; 25 ms edge guard mặc định và crossfade 8 ms tránh hard join/click. Pause ngắn giữ nguyên; pause medium/long/very-long được đưa về các target cấu hình. Speech không bị time-stretch. Thứ tự bắt buộc là TTS → pause compression → duration → WhisperX → scene timing/subtitle → video/SFX/final.
+
+Source SFX/mixed final không bao giờ được dùng cho alignment. Model được load một lần cho language/run. Missing/extra/non-monotonic/out-of-duration word đều fail và ghi `work/alignment/scene_XXX.json`; continuous mode còn ghi `continuous_master.json`. Rolling cues chỉ reveal word tại aligned start. Canonical punctuation và Unicode Vietnamese được giữ nguyên.
+
+Phân tích lại voice WAV hoặc final video bằng PCM detector và diagnostics scene:
+
+```powershell
+.venv\Scripts\python.exe tools\analyze_narration_pacing.py output\voice.wav --alignment-dir work\alignment --json work\diagnostics\pacing.json
+```
 
 ## Developer checks
 
