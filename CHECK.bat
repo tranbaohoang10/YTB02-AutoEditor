@@ -52,15 +52,9 @@ if exist "%KOKORO_PY%" (
   set "CHECK_FAILED=1"
 )
 
-set "SCRIPT_READY=0"
-if exist "input\script.json" (
-  echo [OK] input\script.json
-  set "SCRIPT_READY=1"
-) else (
-  echo [FAIL] input\script.json is missing.
-  echo        Copy input\script.example.json to input\script.json, then edit it.
-  set "CHECK_FAILED=1"
-)
+set "SCRIPTS_READY=1"
+if exist "input\script.en.json" (echo [OK] input\script.en.json) else (echo [FAIL] input\script.en.json is missing. & set "SCRIPTS_READY=0" & set "CHECK_FAILED=1")
+if exist "input\script.vi.json" (echo [OK] input\script.vi.json) else (echo [FAIL] input\script.vi.json is missing. & set "SCRIPTS_READY=0" & set "CHECK_FAILED=1")
 for /f %%I in ('dir /b /a-d "input\videos" 2^>nul ^| findstr /v /i /x ".gitkeep" ^| find /v /c ""') do set "CLIP_COUNT=%%I"
 echo [INFO] Video clips in input\videos: !CLIP_COUNT!
 for /f %%I in ('dir /b /a-d "input\images" 2^>nul ^| findstr /v /i /x ".gitkeep" ^| find /v /c ""') do set "IMAGE_COUNT=%%I"
@@ -68,8 +62,8 @@ echo [INFO] Images in input\images: !IMAGE_COUNT!
 for /f %%I in ('dir /b /ad "input\scenes" 2^>nul ^| find /v /c ""') do set "LAYERED_COUNT=%%I"
 echo [INFO] Layered scene folders in input\scenes: !LAYERED_COUNT!
 
-if "!SCRIPT_READY!"=="1" (
-  for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$v=(Get-Content -Raw -LiteralPath 'input/script.json'|ConvertFrom-Json).visual.image_provider; if($v){$v}else{'manual'}"`) do set "IMAGE_PROVIDER=%%I"
+if "!SCRIPTS_READY!"=="1" (
+  for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$v=(Get-Content -Raw -LiteralPath 'input/script.en.json'|ConvertFrom-Json).visual.image_provider; if($v){$v}else{'manual'}"`) do set "IMAGE_PROVIDER=%%I"
   echo [INFO] Image provider: !IMAGE_PROVIDER!
   if /I "!IMAGE_PROVIDER!"=="gemini_api" (
     if defined GEMINI_API_KEY (
@@ -87,14 +81,21 @@ if "!SCRIPT_READY!"=="1" (
 )
 
 if exist "%PROJECT_PY%" (
-  if "!SCRIPT_READY!"=="1" (
-    echo [INFO] Validating script JSON, visual sources and provider configuration...
-    "%PROJECT_PY%" -m src.pipeline --script input\script.json --config config.json --dry-run
+  if "!SCRIPTS_READY!"=="1" (
+    echo [INFO] Validating EN/VI scripts, visual sources and provider configuration...
+    "%PROJECT_PY%" -m src.pipeline --script input\script.en.json --config config.json --dry-run
     if errorlevel 1 (
-      echo [FAIL] Script, media or provider validation failed. Read the ERROR above.
+      echo [FAIL] English script, media or provider validation failed. Read the ERROR above.
       set "CHECK_FAILED=1"
     ) else (
-      echo [OK] Script JSON and referenced visual sources are valid.
+      echo [OK] English script and referenced visual sources are valid.
+    )
+    "%PROJECT_PY%" -m src.pipeline --script input\script.vi.json --config config.json --dry-run
+    if errorlevel 1 (
+      echo [FAIL] Vietnamese script, media or provider validation failed. Read the ERROR above.
+      set "CHECK_FAILED=1"
+    ) else (
+      echo [OK] Vietnamese script and referenced visual sources are valid.
     )
   )
 )

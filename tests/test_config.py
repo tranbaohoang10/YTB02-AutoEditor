@@ -46,6 +46,21 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(audio.continuous_chunk_scenes, 5)
         self.assertEqual(audio.scene_tail_ms, 100)
 
+    def test_watermark_and_pause_aware_transition_defaults(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        config = load_config(root / "config.json")
+        self.assertTrue(config.watermark.enabled)
+        self.assertEqual(config.watermark.text, "l0ki")
+        self.assertEqual(config.watermark.position, "bottom_right")
+        self.assertEqual(config.watermark.opacity, 0.72)
+        self.assertEqual((config.watermark.margin_right, config.watermark.margin_bottom),
+                         (50, 45))
+        self.assertTrue(config.transitions.pause_aware)
+        self.assertEqual(config.transitions.minimum_pause_ms, 250)
+        self.assertEqual(config.transitions.preferred_trigger_ms, 300)
+        self.assertEqual(config.transitions.max_transition_ms, 350)
+        self.assertEqual(config.transitions.sfx_gain_db, -19.0)
+
 
 if __name__ == "__main__":
     unittest.main()

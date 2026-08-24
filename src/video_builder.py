@@ -19,7 +19,10 @@ from .narration import PauseCompressionReport, compress_smart_pauses
 
 _XFADE_TRANSITIONS = {
     "crossfade": "fade",
-    "paper_wipe": "wipeleft",
+    "paper_swipe": "wipeleft",
+    "paper_slide": "slideleft",
+    "paper_wipe": "wiperight",
+    "collage_push": "slideright",
     "push_left": "slideleft",
     "push_right": "slideright",
     "zoom_fade": "zoomin",
@@ -234,30 +237,33 @@ def concat_video_scenes_with_transitions(
         if index < len(transitions):
             transition = transitions[index]
             transition_duration = transition.duration if transition.type != "none" else frame_duration
-            if transition_duration >= duration:
+            if transition_duration >= duration or transition_duration >= durations[index + 1]:
                 raise AutoEditorError(
-                    f"Transition scene {index + 1} phải ngắn hơn duration scene ({duration:.3f}s)."
+                    f"Transition scene {index + 1} phải ngắn hơn cả hai scene kề nhau."
                 )
             effective_durations.append(transition_duration)
-            tail = f",tpad=stop_mode=clone:stop_duration={transition_duration:.6f}"
-        else:
-            tail = ""
+        incoming_pad = effective_durations[index - 1] if index > 0 else 0.0
+        tail = (
+            f",tpad=stop_mode=clone:stop_duration={incoming_pad:.6f}"
+            if incoming_pad > 0 else ""
+        )
         filters.append(
             f"[{index}:v]trim=duration={duration:.6f},setpts=PTS-STARTPTS{tail},"
             f"fps={config.video.fps},format=yuv420p,setparams=range=tv[v{index}]"
         )
     previous = "v0"
-    offset = durations[0]
+    boundary = durations[0]
     for index, transition in enumerate(transitions, 1):
         transition_duration = effective_durations[index - 1]
         name = _XFADE_TRANSITIONS[transition.type]
         output = f"x{index}"
+        offset = boundary - transition_duration
         filters.append(
             f"[{previous}][v{index}]xfade=transition={name}:"
             f"duration={transition_duration:.6f}:offset={offset:.6f}[{output}]"
         )
         previous = output
-        offset += durations[index]
+        boundary += durations[index]
     command.extend([
         "-filter_complex", ";".join(filters), "-map", f"[{previous}]", "-an",
         "-c:v", config.video.codec, "-crf", str(config.video.crf),
@@ -316,32 +322,62 @@ def render_final_video(
     video_path: Path, audio_path: Path, ass_path: Path,
     temporary_output: Path, config: AppConfig,
     source_audio_path: Path | None = None,
+    transition_audio_path: Path | None = None,
 ) -> None:
     video = config.video
-    subtitle_filter = (
-        f"ass=filename='{ffmpeg_filter_path(ass_path)}',"
-        "format=yuv420p,setparams=range=tv"
-    )
+    video_filters = [f"ass=filename='{ffmpeg_filter_path(ass_path)}'"]
+    if config.watermark.enabled:
+        font = config.watermark.font.replace("\\", r"\\").replace("'", r"\'")
+        text = config.watermark.text.replace("\\", r"\\").replace("'", r"\'")
+        font_option = (
+            f"fontfile='{ffmpeg_filter_path(config.watermark.font_file)}'"
+            if config.watermark.font_file is not None else f"font='{font}'"
+        )
+        video_filters.append(
+            "drawtext="
+            f"{font_option}:text='{text}':"
+            f"fontcolor=white@{config.watermark.opacity:.3f}:"
+            f"fontsize={config.watermark.font_size}:"
+            f"x=w-text_w-{config.watermark.margin_right}:"
+            f"y=h-text_h-{config.watermark.margin_bottom}:"
+            "shadowcolor=black@0.650:"
+            f"shadowx={config.watermark.shadow_x}:shadowy={config.watermark.shadow_y}"
+        )
+    video_filters.extend(["format=yuv420p", "setparams=range=tv"])
+    final_video_filter = ",".join(video_filters)
     command = [
         config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(video_path), "-i", str(audio_path),
     ]
+    extra_audio: list[tuple[Path, str]] = []
     if source_audio_path is not None:
-        command.extend(["-i", str(source_audio_path)])
-        command.extend([
-            "-filter_complex",
-            (
-                f"[1:a:0]aresample={config.audio.mix_sample_rate},"
-                "aformat=sample_fmts=fltp:channel_layouts=mono,"
-                "pan=stereo|c0=0.707107*c0|c1=0.707107*c0[voice];"
-                f"[2:a:0]aresample={config.audio.mix_sample_rate},"
+        extra_audio.append((source_audio_path, "sfx"))
+    if transition_audio_path is not None:
+        extra_audio.append((transition_audio_path, "transition"))
+    if extra_audio:
+        for path, _ in extra_audio:
+            command.extend(["-i", str(path)])
+        audio_filters = [
+            f"[1:a:0]aresample={config.audio.mix_sample_rate},"
+            "aformat=sample_fmts=fltp:channel_layouts=mono,"
+            "pan=stereo|c0=0.707107*c0|c1=0.707107*c0[voice]"
+        ]
+        mix_labels = ["[voice]"]
+        for input_index, (_, label) in enumerate(extra_audio, 2):
+            audio_filters.append(
+                f"[{input_index}:a:0]aresample={config.audio.mix_sample_rate},"
                 f"aformat=sample_fmts=fltp:sample_rates={config.audio.mix_sample_rate}:"
-                "channel_layouts=stereo[sfx];"
-                "[voice][sfx]amix=inputs=2:duration=first:"
-                "dropout_transition=0:normalize=0,"
-                f"loudnorm=I={config.audio.target_lufs}:"
-                f"TP={config.audio.true_peak_db}:LRA={config.audio.lra}[mixed]"
-            ),
+                f"channel_layouts=stereo[{label}]"
+            )
+            mix_labels.append(f"[{label}]")
+        audio_filters.append(
+            f"{''.join(mix_labels)}amix=inputs={len(mix_labels)}:duration=first:"
+            "dropout_transition=0:normalize=0,"
+            f"loudnorm=I={config.audio.target_lufs}:"
+            f"TP={config.audio.true_peak_db}:LRA={config.audio.lra}[mixed]"
+        )
+        command.extend([
+            "-filter_complex", ";".join(audio_filters),
             "-map", "0:v:0", "-map", "[mixed]",
         ])
     else:
@@ -355,7 +391,7 @@ def render_final_video(
             ),
         ])
     command.extend([
-        "-vf", subtitle_filter,
+        "-vf", final_video_filter,
         "-c:v", video.codec, "-crf", str(video.crf), "-preset", video.preset,
         "-pix_fmt", "yuv420p", "-color_range", "tv", "-colorspace", "bt709",
         "-color_primaries", "bt709", "-color_trc", "bt709",

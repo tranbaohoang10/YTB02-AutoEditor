@@ -226,6 +226,75 @@ class RealMediaSmokeTests(unittest.TestCase):
         self.assertLessEqual(abs(one["duration"] - 3.0), 1 / 30 + 0.01)
         self.assertLessEqual(abs(two["duration"] - 6.0), 1 / 30 + 0.02)
 
+    def test_watermark_survives_transition_with_three_audio_layers(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe")
+        self.assertIsNotNone(ffmpeg)
+        self.assertIsNotNone(ffprobe)
+        config = load_config(ROOT / "config.json")
+        config = replace(
+            config, ffmpeg=ffmpeg, ffprobe=ffprobe,
+            video=replace(config.video, width=320, height=180, preset="ultrafast"),
+            watermark=replace(
+                config.watermark, font_size=20, margin_right=14, margin_bottom=12,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scenes = (root / "left.mp4", root / "right.mp4")
+            for scene, color in zip(scenes, ("maroon", "navy")):
+                subprocess.run([
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", f"color=c={color}:s=320x180:r=30:d=1",
+                    "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(scene),
+                ], check=True)
+            joined = root / "joined.mp4"
+            concat_video_scenes_with_transitions(
+                scenes, (1.0, 1.0), (SceneTransition("paper_swipe", 0.25),),
+                joined, config,
+            )
+            voice = root / "voice.wav"
+            source_sfx = root / "source.wav"
+            transition_sfx = root / "transition.wav"
+            _write_sine_wav(voice, 24_000, [(2.0, 0.35)])
+            _write_sine_wav(source_sfx, 48_000, [(2.0, 0.02)])
+            _write_sine_wav(transition_sfx, 48_000, [(2.0, 0.01)])
+            subtitle = root / "subtitle.ass"
+            subtitle.write_text(
+                "[Script Info]\nScriptType: v4.00+\nPlayResX: 320\nPlayResY: 180\n"
+                "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, "
+                "SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, "
+                "StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+                "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+                "Style: Default,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+                "&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1\n"
+                "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, "
+                "MarginV, Effect, Text\n",
+                encoding="utf-8",
+            )
+            final = root / "final.mp4"
+            render_final_video(
+                joined, voice, subtitle, final, config, source_sfx, transition_sfx
+            )
+            frame = root / "during_transition.png"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", "0.88", "-i", str(final), "-frames:v", "1", "-update", "1",
+                str(frame),
+            ], check=True)
+            info = _probe_streams(final, ffprobe)
+            with Image.open(frame).convert("RGB") as image:
+                crop = image.crop((230, 125, 320, 180))
+                neutral_bright = sum(
+                    max(pixel) - min(pixel) < 30 and min(pixel) > 120
+                    for pixel in crop.getdata()
+                )
+        audio = next(item for item in info["streams"] if item["codec_type"] == "audio")
+        self.assertEqual((audio["codec_name"], audio["sample_rate"], audio["channels"]),
+                         ("aac", "48000", 2))
+        self.assertGreater(neutral_bright, 3, "l0ki watermark missing during transition")
+
 
 if __name__ == "__main__":
     unittest.main()
