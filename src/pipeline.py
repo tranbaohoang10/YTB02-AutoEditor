@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import re
@@ -9,7 +10,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .alignment import align_continuous_narration, align_timeline
+from .alignment import (
+    WhisperXAlignmentEngine, align_continuous_narration, align_pause_contexts,
+    align_timeline,
+)
 from .config import AppConfig, load_config
 from .ffmpeg_utils import probe_audio_duration, probe_duration, require_executable
 from .image_assets import VisualAsset, resolve_visual_assets
@@ -19,7 +23,10 @@ from .motion_service import render_image_motion
 from .motion_providers.ai_image_to_video import create_ai_motion_provider
 from .models import AutoEditorError, Script, TimelineEntry
 from .script_loader import load_script
-from .subtitles import create_rolling_cues, write_ass, write_srt
+from .subtitles import (
+    create_rolling_cues, create_subtitle_phrases, write_phrase_ass, write_srt,
+    write_subtitle_diagnostics,
+)
 from .timing import build_timeline
 from .tts_bridge import generate_narration
 from .video_builder import (
@@ -31,6 +38,7 @@ from .video_builder import (
     prepare_video_scene,
     process_narration_audio,
     render_final_video,
+    trim_narration_padding,
 )
 
 
@@ -176,6 +184,37 @@ def quantize_visual_durations(
     )
 
 
+def write_freeze_diagnostics(
+    timeline: tuple[TimelineEntry, ...], visual_durations: tuple[float, ...],
+    assets: dict[int, VisualAsset], config: AppConfig, path: Path,
+) -> dict[str, object]:
+    scenes: list[dict[str, object]] = []
+    for entry, target in zip(timeline, visual_durations):
+        asset = assets[entry.scene.id]
+        source_duration = (
+            probe_duration(asset.path, config.ffprobe) if asset.kind == "video" else target
+        )
+        freeze = max(0.0, target - source_duration)
+        scenes.append({
+            "scene_id": entry.scene.id, "asset_kind": asset.kind,
+            "source_duration": round(source_duration, 6),
+            "target_duration": round(target, 6),
+            "freeze_duration": round(freeze, 6),
+        })
+    freezes = [float(scene["freeze_duration"]) for scene in scenes]
+    payload: dict[str, object] = {
+        "scene_count": len(scenes),
+        "maximum_freeze": round(max(freezes), 6) if freezes else 0.0,
+        "over_750ms": sum(value > 0.75 for value in freezes),
+        "over_1500ms": sum(value > 1.5 for value in freezes),
+        "over_2000ms": sum(value > 2.0 for value in freezes),
+        "scenes": scenes,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
 def _collect_source_audio_clips(
     timeline: tuple[TimelineEntry, ...], assets: dict[int, VisualAsset],
     config: AppConfig,
@@ -274,8 +313,25 @@ def run_pipeline(
         config.audio.narration_mode, config.audio.continuous_chunk_scenes,
     )
     narration_paths = [chunk.output_path for chunk in narration_chunks]
+    # Continuous chunks get a clean edge; an explicit language-specific gap is
+    # inserted at concat time. This avoids both hard joins and accidental
+    # stacking of retained TTS padding plus the configured join cadence.
+    trim_narration_padding(
+        narration_paths, config,
+        edge_silence_ms=0 if config.audio.narration_mode == "continuous" else None,
+    )
+    alignment_engine = WhisperXAlignmentEngine(script.language, config.alignment)
+    pause_contexts = align_pause_contexts(
+        tuple(
+            (chunk.output_path, chunk.text, probe_duration(chunk.output_path, config.ffprobe))
+            for chunk in narration_chunks
+        ),
+        script.language, config.alignment,
+        work_dir / "diagnostics" / "pause_context_alignment", alignment_engine,
+    )
     compression_reports = process_narration_audio(
-        narration_paths, config, work_dir / "diagnostics" / "pause_compression.json"
+        narration_paths, config, work_dir / "diagnostics" / "pause_compression.json",
+        language=script.language, aligned_words=pause_contexts,
     )
     print(
         f"       Mode: {config.audio.narration_mode} | "
@@ -285,7 +341,26 @@ def run_pipeline(
 
     print("[5/10] Building audio master timeline")
     voice_path = output_dir / "voice.wav"
-    concat_audio_scenes(narration_paths, voice_path, config, work_dir)
+    join_gap_ms = (
+        config.audio.pause_profiles[script.language].chunk_join_ms
+        if config.audio.narration_mode == "continuous" else config.audio.gap_ms
+    )
+    chunk_durations = tuple(
+        probe_duration(path, config.ffprobe) for path in narration_paths
+    )
+    alignment_segments: list[dict[str, object]] = []
+    segment_cursor = 0.0
+    for index, (chunk, duration) in enumerate(zip(narration_chunks, chunk_durations)):
+        alignment_segments.append({
+            "text": chunk.text, "start": segment_cursor,
+            "end": segment_cursor + duration,
+        })
+        segment_cursor += duration
+        if index < len(narration_chunks) - 1:
+            segment_cursor += join_gap_ms / 1000.0
+    concat_audio_scenes(
+        narration_paths, voice_path, config, work_dir, gap_ms=join_gap_ms
+    )
     voice_duration = probe_duration(voice_path, config.ffprobe)
     if config.audio.narration_mode == "continuous":
         timeline: tuple[TimelineEntry, ...] = ()
@@ -302,13 +377,15 @@ def run_pipeline(
     if config.audio.narration_mode == "continuous":
         timeline, alignments = align_continuous_narration(
             script.scenes, voice_path, voice_duration, script.language,
-            config.alignment, alignment_dir,
+            config.alignment, alignment_dir, engine=alignment_engine,
+            transcript_segments=tuple(alignment_segments),
         )
         for entry in timeline:
             print(f"       Scene {entry.scene.id:02d} ... {entry.duration:.2f} sec")
     else:
         alignments = align_timeline(
-            timeline, script.language, config.alignment, alignment_dir
+            timeline, script.language, config.alignment, alignment_dir,
+            engine=alignment_engine,
         )
     total = timeline[-1].end
     for alignment in alignments:
@@ -326,6 +403,10 @@ def run_pipeline(
             script.visual.motion_provider, script.visual.motion_model
         )
     visual_durations = quantize_visual_durations(timeline, config.video.fps)
+    write_freeze_diagnostics(
+        timeline, visual_durations, assets, config,
+        work_dir / "diagnostics" / "visual_freeze.json",
+    )
     prepared = _prepare_scenes(
         timeline, assets, scenes_dir, motion_dir, config, selected_motion_mode,
         ai_provider=ai_motion_provider,
@@ -354,12 +435,18 @@ def run_pipeline(
     )
     print(f"       Source-video audio: {len(source_audio_clips)} scene(s) mixed")
 
-    print("[9/10] Creating rolling word subtitles")
+    print("[9/10] Creating stable phrase subtitles")
+    phrases = create_subtitle_phrases(alignments, timeline, config.subtitles)
     cues = create_rolling_cues(alignments, timeline, config.subtitles)
     srt_path = output_dir / "subtitles.srt"
     ass_path = output_dir / "subtitles.ass"
     write_srt(cues, srt_path)
-    write_ass(cues, ass_path, config.subtitles, config.video.width, config.video.height)
+    write_phrase_ass(
+        phrases, ass_path, config.subtitles, config.video.width, config.video.height
+    )
+    write_subtitle_diagnostics(
+        phrases, work_dir / "diagnostics" / "subtitles.json", config.subtitles
+    )
 
     final_path = reserve_final_video_path(output_dir)
     temporary = output_dir / f"{final_path.stem}.building.mp4"

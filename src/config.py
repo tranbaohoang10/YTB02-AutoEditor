@@ -19,6 +19,17 @@ class VideoConfig:
 
 
 @dataclass(frozen=True)
+class PauseProfile:
+    comma_target_ms: int
+    clause_target_ms: int
+    sentence_target_ms: int
+    neutral_medium_target_ms: int
+    neutral_long_target_ms: int
+    neutral_very_long_target_ms: int
+    chunk_join_ms: int
+
+
+@dataclass(frozen=True)
 class AudioConfig:
     sample_rate: int
     mix_sample_rate: int
@@ -37,6 +48,7 @@ class AudioConfig:
     pause_very_long_target_ms: int
     pause_edge_guard_ms: int
     pause_crossfade_ms: int
+    pause_profiles: dict[str, PauseProfile]
     narration_mode: str
     continuous_chunk_scenes: int
     scene_tail_ms: int
@@ -57,7 +69,12 @@ class SubtitleConfig:
     outline: int
     max_chars_per_line: int
     max_lines: int
-    max_words_per_window: int = 6
+    max_words_per_window: int = 8
+    min_words_per_phrase: int = 4
+    max_words_per_phrase: int = 8
+    min_hold_ms: int = 250
+    max_hold_ms: int = 450
+    cps_warning: float = 22.0
 
 
 @dataclass(frozen=True)
@@ -116,6 +133,27 @@ def load_config(path: Path) -> AppConfig:
         kokoro_python = Path(str(data["kokoro_python"]))
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
+        raw_pause_profiles = audio.get("pause_profiles", {})
+        if not isinstance(raw_pause_profiles, dict):
+            raise TypeError("audio.pause_profiles phải là object")
+        pause_profiles: dict[str, PauseProfile] = {}
+        defaults = {
+            "en": (210, 260, 320, 220, 270, 340, 320),
+            "vi": (230, 280, 350, 240, 290, 370, 380),
+        }
+        for language, values in defaults.items():
+            raw_profile = raw_pause_profiles.get(language, {})
+            if not isinstance(raw_profile, dict):
+                raise TypeError(f"audio.pause_profiles.{language} phải là object")
+            names = (
+                "comma_target_ms", "clause_target_ms", "sentence_target_ms",
+                "neutral_medium_target_ms", "neutral_long_target_ms",
+                "neutral_very_long_target_ms", "chunk_join_ms",
+            )
+            pause_profiles[language] = PauseProfile(**{
+                name: int(raw_profile.get(name, default))
+                for name, default in zip(names, values)
+            })
         result = AppConfig(
             kokoro_python=kokoro_python,
             ffmpeg=str(data["ffmpeg"]),
@@ -140,13 +178,14 @@ def load_config(path: Path) -> AppConfig:
                 pause_short_max_ms=int(audio.get("pause_short_max_ms", 180)),
                 pause_medium_max_ms=int(audio.get("pause_medium_max_ms", 350)),
                 pause_long_max_ms=int(audio.get("pause_long_max_ms", 700)),
-                pause_medium_target_ms=int(audio.get("pause_medium_target_ms", 130)),
-                pause_long_target_ms=int(audio.get("pause_long_target_ms", 160)),
+                pause_medium_target_ms=int(audio.get("pause_medium_target_ms", 220)),
+                pause_long_target_ms=int(audio.get("pause_long_target_ms", 280)),
                 pause_very_long_target_ms=int(
-                    audio.get("pause_very_long_target_ms", 190)
+                    audio.get("pause_very_long_target_ms", 350)
                 ),
                 pause_edge_guard_ms=int(audio.get("pause_edge_guard_ms", 25)),
                 pause_crossfade_ms=int(audio.get("pause_crossfade_ms", 8)),
+                pause_profiles=pause_profiles,
                 narration_mode=str(audio.get("narration_mode", "scene")),
                 continuous_chunk_scenes=int(audio.get("continuous_chunk_scenes", 5)),
                 scene_tail_ms=int(audio.get("scene_tail_ms", 100)),
@@ -164,7 +203,12 @@ def load_config(path: Path) -> AppConfig:
                 outline=int(subtitles["outline"]),
                 max_chars_per_line=int(subtitles["max_chars_per_line"]),
                 max_lines=int(subtitles["max_lines"]),
-                max_words_per_window=int(subtitles.get("max_words_per_window", 6)),
+                max_words_per_window=int(subtitles.get("max_words_per_window", 8)),
+                min_words_per_phrase=int(subtitles.get("min_words_per_phrase", 4)),
+                max_words_per_phrase=int(subtitles.get("max_words_per_phrase", 8)),
+                min_hold_ms=int(subtitles.get("min_hold_ms", 250)),
+                max_hold_ms=int(subtitles.get("max_hold_ms", 450)),
+                cps_warning=float(subtitles.get("cps_warning", 22.0)),
             ),
             alignment=AlignmentConfig(
                 engine=str(alignment["engine"]),
@@ -219,6 +263,23 @@ def load_config(path: Path) -> AppConfig:
         result.audio.pause_edge_guard_ms + result.audio.pause_crossfade_ms
     ):
         raise AutoEditorError("Pause target quá ngắn cho edge guard và crossfade.")
+    minimum_safe_pause = 2 * (
+        result.audio.pause_edge_guard_ms + result.audio.pause_crossfade_ms
+    )
+    for language, profile in result.audio.pause_profiles.items():
+        profile_targets = (
+            profile.comma_target_ms, profile.clause_target_ms,
+            profile.sentence_target_ms, profile.neutral_medium_target_ms,
+            profile.neutral_long_target_ms, profile.neutral_very_long_target_ms,
+        )
+        if any(target < minimum_safe_pause or target > 1000 for target in profile_targets):
+            raise AutoEditorError(
+                f"Pause profile {language} phải nằm trong {minimum_safe_pause}..1000 ms."
+            )
+        if not 100 <= profile.chunk_join_ms <= 1000:
+            raise AutoEditorError(
+                f"audio.pause_profiles.{language}.chunk_join_ms phải trong 100..1000 ms."
+            )
     if result.audio.narration_mode not in {"scene", "continuous"}:
         raise AutoEditorError("audio.narration_mode chỉ hỗ trợ 'scene' hoặc 'continuous'.")
     if not 1 <= result.audio.continuous_chunk_scenes <= 30:
@@ -243,4 +304,10 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("alignment.duration_tolerance không được âm.")
     if result.subtitles.max_lines < 1 or result.subtitles.max_words_per_window < 1:
         raise AutoEditorError("Subtitle max_lines và max_words_per_window phải >= 1.")
+    if not 1 <= result.subtitles.min_words_per_phrase <= result.subtitles.max_words_per_phrase <= 12:
+        raise AutoEditorError("Subtitle phrase word limits phải tăng dần trong 1..12.")
+    if not 0 <= result.subtitles.min_hold_ms <= result.subtitles.max_hold_ms <= 2000:
+        raise AutoEditorError("Subtitle hold phải tăng dần trong 0..2000 ms.")
+    if result.subtitles.cps_warning <= 0:
+        raise AutoEditorError("Subtitle cps_warning phải > 0.")
     return result

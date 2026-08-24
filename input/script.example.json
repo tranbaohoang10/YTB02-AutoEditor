@@ -2,7 +2,7 @@
   "title": "Black Wednesday",
   "language": "en",
   "voice": "am_eric",
-  "speed": 1.08,
+  "speed": 1.0,
   "visual": {
     "image_provider": "manual",
     "image_model": "gemini-3.1-flash-image",

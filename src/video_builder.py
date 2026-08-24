@@ -35,7 +35,7 @@ class SourceAudioClip:
 
 
 def trim_narration_padding(
-    audio_paths: Sequence[Path], config: AppConfig,
+    audio_paths: Sequence[Path], config: AppConfig, *, edge_silence_ms: int | None = None,
 ) -> None:
     """Trim only generated leading/trailing padding; internal pauses stay untouched."""
     for audio_path in audio_paths:
@@ -66,9 +66,11 @@ def trim_narration_padding(
                     active.append(start)
             if not active:
                 raise AutoEditorError(f"Narration WAV chỉ có silence: {audio_path.name}")
-            keep = round(
-                parameters.framerate * config.audio.narration_edge_silence_ms / 1000.0
+            keep_ms = (
+                config.audio.narration_edge_silence_ms
+                if edge_silence_ms is None else edge_silence_ms
             )
+            keep = round(parameters.framerate * keep_ms / 1000.0)
             first = max(0, active[0] - keep)
             last = min(len(samples), active[-1] + window + keep)
             trimmed = samples[first:last]
@@ -86,14 +88,19 @@ def trim_narration_padding(
 def process_narration_audio(
     audio_paths: Sequence[Path], config: AppConfig,
     diagnostics_path: Path | None = None,
+    *, language: str = "en", aligned_words: Sequence[Sequence[object]] = (),
 ) -> tuple[PauseCompressionReport, ...]:
-    """Trim generated edges, then compress only eligible internal pauses."""
-    trim_narration_padding(audio_paths, config)
+    """Compress eligible internal pauses after the caller trims chunk edges."""
+    if aligned_words and len(aligned_words) != len(audio_paths):
+        raise AutoEditorError("Số pause-context alignment không khớp narration chunks.")
     reports: tuple[PauseCompressionReport, ...] = ()
     if config.audio.smart_pause_compression:
         reports = tuple(
-            compress_smart_pauses(audio_path, config.audio)
-            for audio_path in audio_paths
+            compress_smart_pauses(
+                audio_path, config.audio, language,
+                aligned_words[index] if aligned_words else (),
+            )
+            for index, audio_path in enumerate(audio_paths)
         )
     if diagnostics_path is not None:
         diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
@@ -263,12 +270,16 @@ def concat_video_scenes_with_transitions(
 
 
 def concat_audio_scenes(
-    audio_paths: Sequence[Path], destination: Path, config: AppConfig, work_dir: Path
+    audio_paths: Sequence[Path], destination: Path, config: AppConfig, work_dir: Path,
+    *, gap_ms: int | None = None,
 ) -> None:
     sources: list[Path] = []
     silence_path = work_dir / "gap.wav"
-    if config.audio.gap_ms > 0 and len(audio_paths) > 1:
-        gap_seconds = config.audio.gap_ms / 1000.0
+    selected_gap_ms = config.audio.gap_ms if gap_ms is None else gap_ms
+    if selected_gap_ms < 0:
+        raise AutoEditorError("Narration join gap không được âm.")
+    if selected_gap_ms > 0 and len(audio_paths) > 1:
+        gap_seconds = selected_gap_ms / 1000.0
         command = [
             config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i",

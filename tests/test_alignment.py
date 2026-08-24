@@ -7,11 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.alignment import (
+    align_pause_contexts,
     align_continuous_narration,
     align_timeline,
     canonical_words,
     to_global_words,
     validate_and_map_words,
+    validate_alignment_coverage,
     WhisperXAlignmentEngine,
 )
 from src.config import AlignmentConfig
@@ -44,7 +46,38 @@ class FakeEngine:
         return self.words
 
 
+class FakeSegmentEngine(FakeEngine):
+    def __init__(self, words: list[dict[str, object]]) -> None:
+        super().__init__(words)
+        self.segments = None
+
+    def align_segments(self, audio_path: Path, segments):
+        self.calls += 1
+        self.segments = segments
+        return self.words
+
+
 class AlignmentTests(unittest.TestCase):
+    def test_complete_word_list_that_covers_only_audio_prefix_is_rejected(self) -> None:
+        with self.assertRaisesRegex(AutoEditorError, "đuôi chưa align"):
+            validate_alignment_coverage(
+                (WordTiming("xong", 0.0, 4.0),), 20.0, label="VI smoke"
+            )
+    def test_pause_context_alignment_is_preliminary_and_writes_diagnostics(self) -> None:
+        engine = FakeEngine(raw_words())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = align_pause_contexts(
+                ((root / "chunk.wav", "Before sunrise in London", 1.5),),
+                "en", config(root), root / "diagnostics", engine,
+            )
+            payload = json.loads(
+                (root / "diagnostics" / "chunk_001.json").read_text(encoding="utf-8")
+            )
+        self.assertEqual(engine.calls, 1)
+        self.assertEqual(len(result[0]), 4)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["aligned_count"], payload["canonical_count"])
     def test_whisperx_386_public_api_contract_without_model_download(self) -> None:
         calls: dict[str, object] = {}
         loads: list[dict[str, object]] = []
@@ -169,6 +202,26 @@ class AlignmentTests(unittest.TestCase):
             sum(len(alignment.words) for alignment in alignments),
             sum(len(canonical_words(scene.text)) for scene in scenes),
         )
+
+    def test_continuous_master_uses_bounded_segments_on_final_wav(self) -> None:
+        scenes = (Scene(1, "a.mp4", "One."), Scene(2, "b.mp4", "Two."))
+        raw = [
+            {"word": "One", "start": 0.1, "end": 0.8},
+            {"word": "Two", "start": 1.2, "end": 1.9},
+        ]
+        segments = (
+            {"text": "One.", "start": 0.0, "end": 0.9},
+            {"text": "Two.", "start": 1.1, "end": 2.0},
+        )
+        engine = FakeSegmentEngine(raw)
+        with tempfile.TemporaryDirectory() as directory:
+            align_continuous_narration(
+                scenes, Path("final-master.wav"), 2.0, "en",
+                config(Path(directory)), Path(directory) / "alignment", engine,
+                transcript_segments=segments,
+            )
+        self.assertEqual(engine.calls, 1)
+        self.assertEqual(engine.segments, segments)
 
     def test_continuous_alignment_diagnostics_preserve_scene_ownership(self) -> None:
         scenes = (Scene(1, "a.mp4", "One."), Scene(2, "b.mp4", "Two."))

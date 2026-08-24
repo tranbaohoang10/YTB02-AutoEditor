@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.config import load_config
 from src.narration import compress_smart_pauses, detect_pause_regions
+from src.models import WordTiming
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,18 +61,37 @@ class SmartPauseCompressionTests(unittest.TestCase):
 
     def test_250ms_pause_compresses_to_medium_target(self) -> None:
         before, after, report = self._compress_known_pause(250)
-        self.assertAlmostEqual(before - after, 0.120, delta=0.012)
-        self.assertAlmostEqual(report.edits[0].target_ms, 130, delta=10)
+        self.assertAlmostEqual(before - after, 0.030, delta=0.012)
+        self.assertAlmostEqual(report.edits[0].target_ms, 220, delta=10)
 
     def test_500ms_pause_compresses_to_long_target(self) -> None:
         before, after, report = self._compress_known_pause(500)
-        self.assertAlmostEqual(before - after, 0.340, delta=0.012)
-        self.assertAlmostEqual(report.edits[0].target_ms, 160, delta=10)
+        self.assertAlmostEqual(before - after, 0.230, delta=0.012)
+        self.assertAlmostEqual(report.edits[0].target_ms, 270, delta=10)
 
     def test_900ms_pause_compresses_to_very_long_target(self) -> None:
         before, after, report = self._compress_known_pause(900)
-        self.assertAlmostEqual(before - after, 0.710, delta=0.012)
-        self.assertAlmostEqual(report.edits[0].target_ms, 190, delta=10)
+        self.assertAlmostEqual(before - after, 0.560, delta=0.012)
+        self.assertAlmostEqual(report.edits[0].target_ms, 340, delta=10)
+
+    def test_punctuation_and_language_select_natural_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reports = []
+            for language, token in (("en", "pause,"), ("en", "pause."), ("vi", "nghỉ.")):
+                path = root / f"{language}_{len(reports)}.wav"
+                _write_wav(path, [
+                    *_tone(self.sample_rate, 200), *([0] * (self.sample_rate // 2)),
+                    *_tone(self.sample_rate, 200),
+                ], self.sample_rate)
+                reports.append(compress_smart_pauses(
+                    path, self.audio, language,
+                    (WordTiming(token, 0.0, 0.19),),
+                ))
+        self.assertAlmostEqual(reports[0].edits[0].target_ms, 210, delta=10)
+        self.assertEqual(reports[0].edits[0].context, "comma")
+        self.assertAlmostEqual(reports[1].edits[0].target_ms, 320, delta=10)
+        self.assertAlmostEqual(reports[2].edits[0].target_ms, 350, delta=10)
 
     def test_low_energy_phoneme_with_peak_above_threshold_is_not_silence(self) -> None:
         count = round(self.sample_rate * 0.25)

@@ -58,6 +58,15 @@ class SubtitleCue:
 
 
 @dataclass(frozen=True)
+class SubtitlePhrase:
+    scene_id: int
+    words: tuple["WordTiming", ...]
+    line_break: int | None
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
 class WordTiming:
     """One canonical display token and its scene-relative or global timing."""
 

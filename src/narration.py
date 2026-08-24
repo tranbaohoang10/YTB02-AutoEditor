@@ -29,6 +29,8 @@ class PauseCompressionEdit:
     original_ms: float
     target_ms: float
     removed_ms: float
+    context: str
+    preceding_word: str | None
 
 
 @dataclass(frozen=True)
@@ -118,14 +120,37 @@ def detect_pause_regions(
     return tuple(regions)
 
 
-def pause_target_ms(duration_ms: float, audio_config: Any) -> float:
+def pause_context(preceding_word: str | None) -> str:
+    token = (preceding_word or "").rstrip()
+    if token.endswith((".", "!", "?", "…")):
+        return "sentence"
+    if token.endswith((";", ":", "—", "–")):
+        return "clause"
+    if token.endswith(","):
+        return "comma"
+    return "neutral"
+
+
+def pause_target_ms(
+    duration_ms: float, audio_config: Any, language: str = "en",
+    preceding_word: str | None = None,
+) -> float:
     if duration_ms <= audio_config.pause_short_max_ms:
         return duration_ms
+    profile = audio_config.pause_profiles[language]
+    context = pause_context(preceding_word)
+    contextual = {
+        "comma": profile.comma_target_ms,
+        "clause": profile.clause_target_ms,
+        "sentence": profile.sentence_target_ms,
+    }.get(context)
+    if contextual is not None:
+        return min(duration_ms, float(contextual))
     if duration_ms <= audio_config.pause_medium_max_ms:
-        return float(audio_config.pause_medium_target_ms)
+        return min(duration_ms, float(profile.neutral_medium_target_ms))
     if duration_ms <= audio_config.pause_long_max_ms:
-        return float(audio_config.pause_long_target_ms)
-    return float(audio_config.pause_very_long_target_ms)
+        return min(duration_ms, float(profile.neutral_long_target_ms))
+    return min(duration_ms, float(profile.neutral_very_long_target_ms))
 
 
 def _crossfade(left: Sequence[int], right: Sequence[int]) -> array:
@@ -142,7 +167,18 @@ def _crossfade(left: Sequence[int], right: Sequence[int]) -> array:
     return mixed
 
 
-def compress_smart_pauses(path: Path, audio_config: Any) -> PauseCompressionReport:
+def _preceding_word(
+    region: PauseRegion, words: Sequence[Any], sample_rate: int,
+) -> str | None:
+    pause_start = region.start_frame / sample_rate
+    candidates = [word for word in words if float(word.end) <= pause_start + 0.04]
+    return str(candidates[-1].word) if candidates else None
+
+
+def compress_smart_pauses(
+    path: Path, audio_config: Any, language: str = "en",
+    aligned_words: Sequence[Any] = (),
+) -> PauseCompressionReport:
     """Shorten only detected internal near-silence; never time-compress speech."""
     parameters, samples = read_pcm16_mono(path)
     sample_rate = parameters.framerate
@@ -153,13 +189,17 @@ def compress_smart_pauses(path: Path, audio_config: Any) -> PauseCompressionRepo
     )
     guard = round(sample_rate * audio_config.pause_edge_guard_ms / 1000.0)
     crossfade = round(sample_rate * audio_config.pause_crossfade_ms / 1000.0)
-    selected: list[tuple[PauseRegion, int, int]] = []
+    if language not in audio_config.pause_profiles:
+        raise AutoEditorError(f"Không có pause profile cho ngôn ngữ {language!r}.")
+    selected: list[tuple[PauseRegion, int, int, str, str | None]] = []
     for region in regions:
         # Outer padding is handled separately. Never turn a file edge into a
         # hard join and never touch pauses that the configured policy keeps.
         if region.start_frame == 0 or region.end_frame == len(samples):
             continue
-        target_ms = pause_target_ms(region.duration_ms, audio_config)
+        preceding = _preceding_word(region, aligned_words, sample_rate)
+        context = pause_context(preceding)
+        target_ms = pause_target_ms(region.duration_ms, audio_config, language, preceding)
         target = round(sample_rate * target_ms / 1000.0)
         if target >= region.end_frame - region.start_frame:
             continue
@@ -167,12 +207,12 @@ def compress_smart_pauses(path: Path, audio_config: Any) -> PauseCompressionRepo
             raise AutoEditorError(
                 "Pause target quá ngắn so với edge guard/crossfade; hãy tăng target."
             )
-        selected.append((region, target, crossfade))
+        selected.append((region, target, crossfade, context, preceding))
 
     output = array("h")
     edits: list[PauseCompressionEdit] = []
     cursor = 0
-    for region, target, fade in selected:
+    for region, target, fade, context, preceding in selected:
         left_keep = target // 2
         right_keep = target - left_keep
         left_mix_start = region.start_frame + left_keep - fade
@@ -196,6 +236,8 @@ def compress_smart_pauses(path: Path, audio_config: Any) -> PauseCompressionRepo
                 original_ms=region.duration_ms,
                 target_ms=actual_target_ms,
                 removed_ms=region.duration_ms - actual_target_ms,
+                context=context,
+                preceding_word=preceding,
             )
         )
     output.extend(samples[cursor:])
