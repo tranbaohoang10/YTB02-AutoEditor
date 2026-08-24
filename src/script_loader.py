@@ -8,7 +8,7 @@ from .models import AutoEditorError, Scene, Script, VisualSettings
 
 
 DEFAULT_VOICES = {"en": "am_eric", "vi": "hung_thinh"}
-DEFAULT_SPEED = 1.08
+DEFAULT_SPEED = 1.0
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 MOTION_TYPES = {
     "slow_push_in", "slow_pull_out", "pan_left", "pan_right",

@@ -137,6 +137,21 @@ def validate_and_map_words(
     return tuple(mapped)
 
 
+def validate_alignment_coverage(
+    words: Sequence[WordTiming], audio_duration: float, *, label: str,
+) -> None:
+    """Reject syntactically complete timings that cover only an early audio prefix."""
+    if not words or audio_duration <= 0:
+        raise AutoEditorError(f"{label}: alignment/audio rỗng.")
+    allowed_tail = max(2.0, audio_duration * 0.15)
+    trailing = audio_duration - words[-1].end
+    if trailing > allowed_tail:
+        raise AutoEditorError(
+            f"{label}: aligned words chỉ phủ đến {words[-1].end:.3f}s trên "
+            f"audio {audio_duration:.3f}s (đuôi chưa align {trailing:.3f}s)."
+        )
+
+
 def to_global_words(alignment: SceneAlignment, offset: float) -> tuple[WordTiming, ...]:
     return tuple(
         WordTiming(word.word, word.start + offset, word.end + offset)
@@ -179,11 +194,20 @@ class WhisperXAlignmentEngine:
         self._device = config.device
 
     def align(self, audio_path: Path, text: str, duration: float) -> Sequence[dict[str, Any]]:
-        transcript = [{"text": text, "start": 0.0, "end": duration}]
+        return self.align_segments(
+            audio_path, ({"text": text, "start": 0.0, "end": duration},)
+        )
+
+    def align_segments(
+        self, audio_path: Path, transcript: Sequence[dict[str, Any]],
+    ) -> Sequence[dict[str, Any]]:
+        """Align bounded canonical segments against one final master waveform."""
+        if not transcript:
+            raise AutoEditorError("WhisperX cần ít nhất một transcript segment.")
         try:
             audio = self._whisperx.load_audio(str(audio_path))
             result = self._whisperx.align(
-                transcript,
+                list(transcript),
                 self._model,
                 self._metadata,
                 audio,
@@ -262,6 +286,9 @@ def align_timeline(
             words = validate_and_map_words(
                 entry.scene.text, raw_words, entry.duration, config.duration_tolerance
             )
+            validate_alignment_coverage(
+                words, entry.duration, label=f"Scene {entry.scene.id:02d}"
+            )
             alignment = SceneAlignment(entry.scene.id, language, words)
             _write_diagnostics(diagnostics_path, entry, language, "ok", words)
             results.append(alignment)
@@ -284,10 +311,57 @@ def align_timeline(
     return tuple(results)
 
 
+def align_pause_contexts(
+    items: Sequence[tuple[Path, str, float]], language: str,
+    config: AlignmentConfig, diagnostics_dir: Path,
+    engine: AlignmentEngine,
+) -> tuple[tuple[WordTiming, ...], ...]:
+    """Align trimmed raw chunks only to classify real pauses by punctuation.
+
+    This preliminary pass never becomes the subtitle timeline. Production
+    subtitles are always made from a second alignment of the processed master.
+    """
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    results: list[tuple[WordTiming, ...]] = []
+    for index, (audio_path, text, duration) in enumerate(items, 1):
+        raw_words: Sequence[dict[str, Any]] = []
+        path = diagnostics_dir / f"chunk_{index:03d}.json"
+        try:
+            raw_words = engine.align(audio_path, text, duration)
+            words = validate_and_map_words(
+                text, raw_words, duration, config.duration_tolerance
+            )
+            validate_alignment_coverage(
+                words, duration, label=f"Pause-context chunk {index:02d}"
+            )
+        except AutoEditorError as exc:
+            path.write_text(json.dumps({
+                "status": "failed", "canonical_text": text,
+                "audio_duration": round(duration, 6), "error": str(exc),
+                "raw_words": list(raw_words),
+            }, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            raise AutoEditorError(
+                f"Pause-context alignment failed for chunk {index:02d}. "
+                f"See {path}\nReason: {exc}"
+            ) from exc
+        path.write_text(json.dumps({
+            "status": "ok", "canonical_text": text,
+            "audio_duration": round(duration, 6),
+            "canonical_count": len(words), "aligned_count": len(words),
+            "words": [
+                {"word": word.word, "start": round(word.start, 6),
+                 "end": round(word.end, 6)} for word in words
+            ],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        results.append(words)
+    return tuple(results)
+
+
 def align_continuous_narration(
     scenes: Sequence[Scene], audio_path: Path, audio_duration: float,
     language: str, config: AlignmentConfig, alignment_dir: Path,
     engine: AlignmentEngine | None = None,
+    transcript_segments: Sequence[dict[str, Any]] | None = None,
 ) -> tuple[tuple[TimelineEntry, ...], tuple[SceneAlignment, ...]]:
     """Align one canonical narration master and map every word to one scene."""
     if config.allow_approximate_fallback:
@@ -302,9 +376,25 @@ def align_continuous_narration(
     active_engine = engine or WhisperXAlignmentEngine(language, config)
     raw_words: Sequence[dict[str, Any]] = []
     try:
-        raw_words = active_engine.align(audio_path, full_text, audio_duration)
+        if transcript_segments is None:
+            raw_words = active_engine.align(audio_path, full_text, audio_duration)
+        else:
+            align_segments = getattr(active_engine, "align_segments", None)
+            if not callable(align_segments):
+                raise AutoEditorError(
+                    "Alignment engine không hỗ trợ bounded master segments."
+                )
+            segment_text = " ".join(str(item.get("text", "")) for item in transcript_segments)
+            if canonical_words(segment_text) != canonical_words(full_text):
+                raise AutoEditorError(
+                    "Bounded alignment segments không khớp canonical master text."
+                )
+            raw_words = align_segments(audio_path, transcript_segments)
         global_words = validate_and_map_words(
             full_text, raw_words, audio_duration, config.duration_tolerance
+        )
+        validate_alignment_coverage(
+            global_words, audio_duration, label="Continuous master"
         )
     except AutoEditorError as exc:
         (alignment_dir / "continuous_master.json").write_text(
@@ -375,6 +465,9 @@ def align_continuous_narration(
                 "canonical_count": len(global_words),
                 "aligned_count": len(global_words),
                 "scene_count": len(scenes),
+                "alignment_segment_count": (
+                    len(transcript_segments) if transcript_segments is not None else 1
+                ),
                 "scene_word_counts": {
                     str(scene.id): len(words) for scene, words in zip(scenes, owned)
                 },

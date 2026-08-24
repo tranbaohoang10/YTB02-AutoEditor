@@ -6,10 +6,13 @@ from src.config import SubtitleConfig
 from src.models import Scene, SceneAlignment, TimelineEntry, WordTiming
 from src.subtitles import (
     create_rolling_cues,
+    create_subtitle_phrases,
     format_ass_timestamp,
     format_srt_timestamp,
     write_ass,
+    write_phrase_ass,
     write_srt,
+    write_subtitle_diagnostics,
 )
 
 
@@ -139,6 +142,27 @@ class SubtitleTests(unittest.TestCase):
         self.assertTrue(all("Next" not in text for text in before_boundary))
         next_cue = next(cue for cue in cues if "Next" in cue.text)
         self.assertGreaterEqual(next_cue.start, 0.70)
+
+    def test_phrase_layout_hold_karaoke_and_diagnostics_are_stable(self) -> None:
+        timeline, alignments = sample_scene()
+        phrases = create_subtitle_phrases(alignments, timeline, CONFIG)
+        self.assertEqual(len(phrases), 1)
+        self.assertEqual(len(phrases[0].words), 4)
+        self.assertAlmostEqual(phrases[0].end - phrases[0].words[-1].end, 0.3)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_phrase_ass(phrases, root / "phrases.ass", CONFIG, 1920, 1080)
+            diagnostics = write_subtitle_diagnostics(
+                phrases, root / "subtitles.json", CONFIG
+            )
+            ass = (root / "phrases.ass").read_text(encoding="utf-8-sig")
+        self.assertEqual(ass.count("Dialogue: 0,"), 1)
+        self.assertIn("SecondaryColour", ass)
+        self.assertIn("&HFFFFFFFF", ass)
+        self.assertIn(r"{\ko30}Before", ass)
+        self.assertIn(r"\N", ass)
+        self.assertEqual(diagnostics["phrase_count"], 1)
+        self.assertEqual(diagnostics["phrases"][0]["hold_ms"], 300)
 
 
 if __name__ == "__main__":

@@ -44,11 +44,11 @@ class ScriptLoaderTests(unittest.TestCase):
         self.assertEqual([scene.id for scene in script.scenes], [1, 2])
         self.assertEqual(script.language, "en")
 
-    def test_default_speed_is_1_08_when_omitted(self) -> None:
+    def test_default_speed_is_1_0_when_omitted(self) -> None:
         data = self.valid_data()
         del data["speed"]
         script = load_script(self.write(data), self.videos)
-        self.assertEqual(script.speed, 1.08)
+        self.assertEqual(script.speed, 1.0)
 
     def test_explicit_speed_overrides_default(self) -> None:
         for speed in (1.0, 1.15):

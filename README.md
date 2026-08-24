@@ -4,7 +4,7 @@ YTB02 AutoEditor là pipeline dựng video local-first cho Windows. Project nh�
 
 Pipeline:
 
-`script` → Kokoro TTS → smart pause compression → đo WAV thật → WhisperX forced alignment → visual retiming → rolling subtitle → FFmpeg assemble/SFX mix → `output/FINAL_VIDEO_<số>.mp4`
+`script` → Kokoro TTS → punctuation-aware pause compression → đo WAV thật → WhisperX forced alignment → visual retiming → stable phrase subtitle → FFmpeg assemble/SFX mix → `output/FINAL_VIDEO_<số>.mp4`
 
 ## Invariant không thay đổi từ V1
 
@@ -13,7 +13,7 @@ Pipeline:
 - Future word không xuất hiện trước `word.start`; SRT/ASS luôn ceil timestamp.
 - Không có proportional character/word fallback. Alignment fail là explicit và có diagnostics trong `work/alignment/`.
 - Audio được tạo và nén pause trước khi đo/alignment. Visual scene bám timeline WAV hậu xử lý; cumulative frame quantization không được phép cắt ngắn audio master.
-- English mặc định `am_eric`, Vietnamese mặc định `hung_thinh`, speed mặc định `1.08`.
+- English mặc định `am_eric`, Vietnamese mặc định `hung_thinh`, speed mặc định `1.0`; trường `speed` trong script vẫn là override rõ ràng.
 - Loudness narration mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source-video audio được mix làm SFX nền ở gain mặc định `-18 dB`.
 - Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC stereo 48 kHz.
 - Mỗi build thành công tạo `FINAL_VIDEO_<số>.mp4` mới theo số lớn nhất hiện có + 1; video cũ không bị ghi đè. Tên được giữ trước khi FFmpeg render để giảm nguy cơ collision giữa các build đồng thời.
@@ -195,7 +195,7 @@ Script V1 tiếp tục hoạt động:
 {
   "language": "vi",
   "voice": "hung_thinh",
-  "speed": 1.08,
+  "speed": 1.0,
   "scenes": [
     {"id": 1, "video": "scene_01.mp4", "text": "Nội dung chuẩn từ script."}
   ]

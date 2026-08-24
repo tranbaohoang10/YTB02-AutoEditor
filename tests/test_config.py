@@ -13,7 +13,9 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.alignment.allow_approximate_fallback)
         self.assertEqual(config.alignment.cache_dir, (root / ".cache" / "alignment").resolve())
         self.assertIsNone(config.alignment.model_en)
-        self.assertIsNone(config.alignment.model_vi)
+        self.assertEqual(
+            config.alignment.model_vi, "dragonSwing/wav2vec2-base-vietnamese"
+        )
 
     def test_loudness_config_defaults_are_parsed(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -31,9 +33,13 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(audio.smart_pause_compression)
         self.assertEqual(audio.pause_threshold_db, -35.0)
         self.assertEqual(audio.pause_min_detect_ms, 120)
-        self.assertEqual(audio.pause_medium_target_ms, 130)
-        self.assertEqual(audio.pause_long_target_ms, 160)
-        self.assertEqual(audio.pause_very_long_target_ms, 190)
+        self.assertEqual(audio.pause_medium_target_ms, 220)
+        self.assertEqual(audio.pause_long_target_ms, 280)
+        self.assertEqual(audio.pause_very_long_target_ms, 350)
+        self.assertEqual(audio.pause_profiles["en"].sentence_target_ms, 320)
+        self.assertEqual(audio.pause_profiles["en"].chunk_join_ms, 320)
+        self.assertEqual(audio.pause_profiles["vi"].sentence_target_ms, 350)
+        self.assertEqual(audio.pause_profiles["vi"].chunk_join_ms, 380)
         self.assertEqual(audio.pause_edge_guard_ms, 25)
         self.assertEqual(audio.pause_crossfade_ms, 8)
         self.assertEqual(audio.narration_mode, "continuous")

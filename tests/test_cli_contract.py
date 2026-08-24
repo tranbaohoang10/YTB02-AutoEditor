@@ -19,10 +19,34 @@ from src.pipeline import (
     quantize_visual_durations,
     reserve_final_video_path,
     run_pipeline,
+    write_freeze_diagnostics,
 )
 
 
 class CLIContractTests(unittest.TestCase):
+    def test_freeze_diagnostics_reports_per_scene_thresholds(self) -> None:
+        config = load_config(Path(__file__).resolve().parents[1] / "config.json")
+        scenes = (
+            Scene(1, "one.mp4", "One"), Scene(2, "two.mp4", "Two"),
+        )
+        timeline = (
+            TimelineEntry(scenes[0], Path("voice.wav"), 2.0, 0.0, 2.0),
+            TimelineEntry(scenes[1], Path("voice.wav"), 3.0, 2.0, 5.0),
+        )
+        assets = {
+            1: VisualAsset("video", Path("one.mp4")),
+            2: VisualAsset("video", Path("two.mp4")),
+        }
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.pipeline.probe_duration", side_effect=(1.0, 3.0)
+        ):
+            payload = write_freeze_diagnostics(
+                timeline, (2.0, 3.0), assets, config,
+                Path(directory) / "freeze.json",
+            )
+        self.assertEqual(payload["over_750ms"], 1)
+        self.assertEqual(payload["over_1500ms"], 0)
+        self.assertEqual(payload["scenes"][0]["freeze_duration"], 1.0)
     def test_cli_accepts_new_actions_and_motion_mode(self) -> None:
         args = _parser().parse_args(["--generate-images", "--force-images", "--motion-mode", "local"])
         self.assertTrue(args.generate_images)
