@@ -139,8 +139,14 @@ class VideoBuilderTests(unittest.TestCase):
 
     def test_all_transition_presets_map_to_ffmpeg_xfade_and_preserve_offsets(self) -> None:
         config = load_config(ROOT / "config.json")
-        transitions = ("crossfade", "paper_wipe", "push_left", "push_right", "zoom_fade")
-        expected = ("fade", "wipeleft", "slideleft", "slideright", "zoomin")
+        transitions = (
+            "crossfade", "paper_swipe", "paper_slide", "paper_wipe",
+            "collage_push", "push_left", "push_right", "zoom_fade",
+        )
+        expected = (
+            "fade", "wipeleft", "slideleft", "wiperight",
+            "slideright", "slideleft", "slideright", "zoomin",
+        )
         for transition, ffmpeg_name in zip(transitions, expected):
             with self.subTest(transition=transition), tempfile.TemporaryDirectory() as directory, patch(
                 "src.video_builder.run_media_command"
@@ -153,7 +159,8 @@ class VideoBuilderTests(unittest.TestCase):
             command = run.call_args.args[0]
             graph = command[command.index("-filter_complex") + 1]
             self.assertIn(f"transition={ffmpeg_name}", graph)
-            self.assertIn("duration=0.400000:offset=2.000000", graph)
+            self.assertIn("duration=0.400000:offset=1.600000", graph)
+            self.assertIn("tpad=stop_mode=clone:stop_duration=0.400000", graph)
 
     def test_none_transition_is_effective_hard_cut_of_one_frame(self) -> None:
         config = load_config(ROOT / "config.json")
@@ -166,7 +173,7 @@ class VideoBuilderTests(unittest.TestCase):
                 (SceneTransition(),), root / "out.mp4", config,
             )
         graph = run.call_args.args[0][run.call_args.args[0].index("-filter_complex") + 1]
-        self.assertIn("duration=0.033333:offset=1.000000", graph)
+        self.assertIn("duration=0.033333:offset=0.966667", graph)
 
     def test_final_encode_signals_limited_bt709_contract(self) -> None:
         config = load_config(ROOT / "config.json")
@@ -188,6 +195,12 @@ class VideoBuilderTests(unittest.TestCase):
             "pan=stereo|c0=0.707107*c0|c1=0.707107*c0",
             command[command.index("-af") + 1],
         )
+        video_filter = command[command.index("-vf") + 1]
+        self.assertIn("ass=filename=", video_filter)
+        self.assertIn("drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='l0ki'",
+                      video_filter)
+        self.assertIn("x=w-text_w-50:y=h-text_h-45", video_filter)
+        self.assertLess(video_filter.index("ass="), video_filter.index("drawtext="))
 
     def test_final_mix_keeps_narration_primary_and_adds_source_sfx(self) -> None:
         config = load_config(ROOT / "config.json")
@@ -209,6 +222,21 @@ class VideoBuilderTests(unittest.TestCase):
         self.assertIn("loudnorm=I=-18.0:TP=-1.5:LRA=7.0[mixed]", graph)
         self.assertIn("pan=stereo|c0=0.707107*c0|c1=0.707107*c0[voice]", graph)
         self.assertNotIn("volume=", graph.split("[voice]")[0])
+
+    def test_final_mix_accepts_source_and_transition_sfx_as_separate_layers(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            render_final_video(
+                root / "video.mp4", root / "voice.wav", root / "subtitle.ass",
+                root / "final.mp4", config, root / "source.wav", root / "transition.wav",
+            )
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("[voice][sfx][transition]amix=inputs=3:duration=first", graph)
+        self.assertIn("normalize=0", graph)
 
 
 if __name__ == "__main__":

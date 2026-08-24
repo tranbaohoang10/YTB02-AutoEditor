@@ -12,6 +12,8 @@ credentials/
 *.key
 
 input/script.json
+!input/script.en.json
+!input/script.vi.json
 input/videos/*
 !input/videos/.gitkeep
 input/images/*

@@ -89,6 +89,38 @@ class AlignmentConfig:
 
 
 @dataclass(frozen=True)
+class WatermarkConfig:
+    enabled: bool
+    text: str
+    position: str
+    font: str
+    font_file: Path | None
+    font_size: int
+    opacity: float
+    margin_right: int
+    margin_bottom: int
+    shadow_x: int
+    shadow_y: int
+
+
+@dataclass(frozen=True)
+class TransitionConfig:
+    pause_aware: bool
+    minimum_pause_ms: int
+    preferred_trigger_ms: int
+    strong_trigger_ms: int
+    minimum_transition_ms: int
+    max_transition_ms: int
+    enable_visual: bool
+    enable_sfx: bool
+    style: str
+    sfx_dir: Path
+    sfx_gain_db: float
+    sfx_fade_ms: int
+    source_conflict_threshold_db: float
+
+
+@dataclass(frozen=True)
 class AppConfig:
     kokoro_python: Path
     ffmpeg: str
@@ -97,6 +129,8 @@ class AppConfig:
     audio: AudioConfig
     subtitles: SubtitleConfig
     alignment: AlignmentConfig
+    watermark: WatermarkConfig
+    transitions: TransitionConfig
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -118,6 +152,8 @@ def load_config(path: Path) -> AppConfig:
         audio = _section(data, "audio")
         subtitles = _section(data, "subtitles")
         alignment = _section(data, "alignment")
+        watermark = _section(data, "watermark")
+        transitions = _section(data, "transitions")
         fallback_value = alignment["allow_approximate_fallback"]
         if not isinstance(fallback_value, bool):
             raise TypeError("alignment.allow_approximate_fallback phải là boolean")
@@ -130,6 +166,18 @@ def load_config(path: Path) -> AppConfig:
         smart_pause_compression = audio.get("smart_pause_compression", True)
         if not isinstance(smart_pause_compression, bool):
             raise TypeError("audio.smart_pause_compression phải là boolean")
+        watermark_enabled = watermark.get("enabled", True)
+        transition_pause_aware = transitions.get("pause_aware", True)
+        transition_visual = transitions.get("enable_visual", True)
+        transition_sfx = transitions.get("enable_sfx", True)
+        for label, value in (
+            ("watermark.enabled", watermark_enabled),
+            ("transitions.pause_aware", transition_pause_aware),
+            ("transitions.enable_visual", transition_visual),
+            ("transitions.enable_sfx", transition_sfx),
+        ):
+            if not isinstance(value, bool):
+                raise TypeError(f"{label} phải là boolean")
         kokoro_python = Path(str(data["kokoro_python"]))
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
@@ -221,6 +269,43 @@ def load_config(path: Path) -> AppConfig:
                 else Path(str(alignment["cache_dir"])),
                 duration_tolerance=float(alignment.get("duration_tolerance", 0.25)),
             ),
+            watermark=WatermarkConfig(
+                enabled=watermark_enabled,
+                text=str(watermark.get("text", "l0ki")),
+                position=str(watermark.get("position", "bottom_right")),
+                font=str(watermark.get("font", "Arial")),
+                font_file=(
+                    Path(str(watermark["font_file"]))
+                    if watermark.get("font_file") else None
+                ),
+                font_size=int(watermark.get("font_size", 28)),
+                opacity=float(watermark.get("opacity", 0.72)),
+                margin_right=int(watermark.get("margin_right", 50)),
+                margin_bottom=int(watermark.get("margin_bottom", 45)),
+                shadow_x=int(watermark.get("shadow_x", 2)),
+                shadow_y=int(watermark.get("shadow_y", 2)),
+            ),
+            transitions=TransitionConfig(
+                pause_aware=transition_pause_aware,
+                minimum_pause_ms=int(transitions.get("minimum_pause_ms", 250)),
+                preferred_trigger_ms=int(transitions.get("preferred_trigger_ms", 300)),
+                strong_trigger_ms=int(transitions.get("strong_trigger_ms", 450)),
+                minimum_transition_ms=int(
+                    transitions.get("minimum_transition_ms", 180)
+                ),
+                max_transition_ms=int(transitions.get("max_transition_ms", 350)),
+                enable_visual=transition_visual,
+                enable_sfx=transition_sfx,
+                style=str(transitions.get("style", "paper_documentary")),
+                sfx_dir=(path.parent / str(transitions.get("sfx_dir", "assets/sfx"))).resolve()
+                if not Path(str(transitions.get("sfx_dir", "assets/sfx"))).is_absolute()
+                else Path(str(transitions.get("sfx_dir", "assets/sfx"))),
+                sfx_gain_db=float(transitions.get("sfx_gain_db", -19.0)),
+                sfx_fade_ms=int(transitions.get("sfx_fade_ms", 30)),
+                source_conflict_threshold_db=float(
+                    transitions.get("source_conflict_threshold_db", -40.0)
+                ),
+            ),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise AutoEditorError(f"config.json có giá trị thiếu hoặc không hợp lệ: {exc}") from exc
@@ -310,4 +395,39 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("Subtitle hold phải tăng dần trong 0..2000 ms.")
     if result.subtitles.cps_warning <= 0:
         raise AutoEditorError("Subtitle cps_warning phải > 0.")
+    if result.watermark.text != "l0ki":
+        raise AutoEditorError("watermark.text phải đúng chính xác là 'l0ki'.")
+    if result.watermark.position != "bottom_right":
+        raise AutoEditorError("watermark.position hiện chỉ hỗ trợ 'bottom_right'.")
+    if not 8 <= result.watermark.font_size <= 120:
+        raise AutoEditorError("watermark.font_size phải trong khoảng 8..120.")
+    if not 0.0 < result.watermark.opacity <= 1.0:
+        raise AutoEditorError("watermark.opacity phải trong khoảng (0, 1].")
+    if min(result.watermark.margin_right, result.watermark.margin_bottom) < 0:
+        raise AutoEditorError("Watermark margins không được âm.")
+    if result.transitions.style != "paper_documentary":
+        raise AutoEditorError("transitions.style hiện chỉ hỗ trợ 'paper_documentary'.")
+    pause_thresholds = (
+        result.transitions.minimum_pause_ms,
+        result.transitions.preferred_trigger_ms,
+        result.transitions.strong_trigger_ms,
+    )
+    if not 0 < pause_thresholds[0] <= pause_thresholds[1] <= pause_thresholds[2]:
+        raise AutoEditorError("Các ngưỡng pause transition phải tăng dần và > 0.")
+    if not (
+        1 <= result.transitions.minimum_transition_ms
+        <= result.transitions.max_transition_ms
+        <= 1000
+    ):
+        raise AutoEditorError("Transition duration phải tăng dần trong 1..1000 ms.")
+    if result.transitions.minimum_transition_ms > result.transitions.minimum_pause_ms:
+        raise AutoEditorError("minimum_transition_ms không được vượt minimum_pause_ms.")
+    if not -60.0 <= result.transitions.sfx_gain_db <= 0.0:
+        raise AutoEditorError("transitions.sfx_gain_db phải trong khoảng -60..0 dB.")
+    if not 0 <= result.transitions.sfx_fade_ms <= 250:
+        raise AutoEditorError("transitions.sfx_fade_ms phải trong khoảng 0..250 ms.")
+    if not -90.0 <= result.transitions.source_conflict_threshold_db <= 0.0:
+        raise AutoEditorError(
+            "transitions.source_conflict_threshold_db phải trong khoảng -90..0 dB."
+        )
     return result

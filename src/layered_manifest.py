@@ -16,7 +16,10 @@ ENTER_PRESETS = {
     "paper_drop", "slight_rotate_in", "line_draw", "string_reveal",
     "highlight_flash",
 }
-TRANSITIONS = {"crossfade", "paper_wipe", "push_left", "push_right", "zoom_fade", "none"}
+TRANSITIONS = {
+    "crossfade", "paper_swipe", "paper_slide", "paper_wipe", "collage_push",
+    "push_left", "push_right", "zoom_fade", "none",
+}
 CAMERA_TYPES = {"none", "drift", "push_in", "push_out"}
 ANCHORS = {
     "center", "top_left", "top_center", "top_right", "center_left",

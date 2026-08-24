@@ -4,7 +4,7 @@ YTB02 AutoEditor là pipeline dựng video local-first cho Windows. Project nh�
 
 Pipeline:
 
-`script` → Kokoro TTS → punctuation-aware pause compression → đo WAV thật → WhisperX forced alignment → visual retiming → stable phrase subtitle → FFmpeg assemble/SFX mix → `output/FINAL_VIDEO_<số>.mp4`
+`script` → Kokoro TTS → punctuation-aware pause compression → đo WAV thật → WhisperX forced alignment → visual retiming → pause-aware paper transition → stable phrase subtitle → Flow/transition SFX mix → watermark → `output/FINAL_VIDEO_EN|VI_<số>.mp4`
 
 ## Invariant không thay đổi từ V1
 
@@ -16,7 +16,8 @@ Pipeline:
 - English mặc định `am_eric`, Vietnamese mặc định `hung_thinh`, speed mặc định `1.0`; trường `speed` trong script vẫn là override rõ ràng.
 - Loudness narration mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source-video audio được mix làm SFX nền ở gain mặc định `-18 dB`.
 - Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC stereo 48 kHz.
-- Mỗi build thành công tạo `FINAL_VIDEO_<số>.mp4` mới theo số lớn nhất hiện có + 1; video cũ không bị ghi đè. Tên được giữ trước khi FFmpeg render để giảm nguy cơ collision giữa các build đồng thời.
+- EN và VI có dãy độc lập: `FINAL_VIDEO_EN_<số>.mp4` và `FINAL_VIDEO_VI_<số>.mp4`. Mỗi dãy dùng số nguyên hợp lệ lớn nhất + 1, không lấp gap/ghi đè; tên được giữ atomic trước khi FFmpeg render.
+- Watermark `l0ki` được burn ở final render, bottom-right, sau subtitle/transition; source Flow clip không bị sửa.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
 ## Workflow ưu tiên — motion graphics layered collage
@@ -233,14 +234,15 @@ git pull --ff-only origin main
 
 Lần đầu double-click `SETUP.bat`. Script tạo/reuse `.venv`, cài CPU PyTorch, WhisperX, Pillow và official `google-genai`, sau đó chạy `pip check`. Alignment model được cache ở `.cache/alignment`, không nằm trong `work/`.
 
-Mỗi video mới:
+Workflow song ngữ thường dùng:
 
-1. Copy `input\script.example.json` thành `input\script.json` rồi sửa.
+1. Sửa lâu dài `input\script.en.json` và `input\script.vi.json`; cả hai trỏ cùng `scene_01.mp4`…`scene_30.mp4`.
 2. Copy ảnh vào `input\images` hoặc video vào `input\videos` nếu dùng manual media.
 3. Double-click `CHECK.bat`.
-4. Chỉ tạo/resolve ảnh: `GENERATE_IMAGES.bat`.
-5. Build: `BUILD_VIDEO.bat`, hoặc một nút generate + build: `RUN_ALL.bat`.
-6. Lấy file mới nhất dạng `output\FINAL_VIDEO_<số>.mp4`; console in đường dẫn tuyệt đối dưới nhãn `FINAL VIDEO:` khi build thành công.
+4. Double-click `RUN_EN.bat` hoặc `RUN_VI.bat`.
+5. Lấy output mới nhất theo ngôn ngữ; console in đường dẫn tuyệt đối dưới nhãn `FINAL VIDEO:`.
+
+`input\script.json`, `BUILD_VIDEO.bat` và `RUN_ALL.bat` vẫn được giữ cho workflow legacy một-script.
 
 `CHECK.bat` kiểm tra Python, FFmpeg/ffprobe, Kokoro EN/VI, WhisperX, alignment config/cache, Pillow, Google GenAI client, script, media paths, provider và credential theo mode. Manual mode không yêu cầu Gemini key. CHECK không tạo ảnh/TTS, không tải model alignment và không render.
 
@@ -254,6 +256,8 @@ Mỗi video mới:
 .venv\Scripts\python.exe -m src.pipeline --run-all
 .venv\Scripts\python.exe -m src.pipeline --run-all --motion-mode local
 .venv\Scripts\python.exe -m src.pipeline --run-all --motion-mode ai
+.venv\Scripts\python.exe -m src.pipeline --script input\script.en.json --build
+.venv\Scripts\python.exe -m src.pipeline --script input\script.vi.json --build
 ```
 
 `--dry-run` chỉ parse/validate; không gọi API, không TTS, không download alignment model và không render.
@@ -282,7 +286,10 @@ input/images/             ảnh manual
 input/scenes/             layered scene assets của user
 input/sample-scenes/      sample paper-collage được track trong repo
 input/videos/             video source V1
-input/script.json         source of truth
+input/script.en.json      canonical English source of truth
+input/script.vi.json      canonical Vietnamese source of truth
+input/script.json         optional legacy source of truth
+assets/sfx/               local/procedural transition accents
 work/audio/               WAV scene hoặc multi-scene chunk
 work/generated-images/    ảnh API + cache metadata
 work/motion/              image-motion clips
@@ -291,10 +298,19 @@ work/alignment/           word timing diagnostics
 output/voice.wav
 output/subtitles.srt
 output/subtitles.ass
-output/FINAL_VIDEO_<số>.mp4
+output/FINAL_VIDEO_EN_<số>.mp4
+output/FINAL_VIDEO_VI_<số>.mp4
 ```
 
-Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images/layered assets, generated-image cache hoặc video final cũ. Chỉ file khớp chính xác `FINAL_VIDEO_<integer>.mp4` tham gia cấp số; các tên như `FINAL_VIDEO_backup.mp4` bị bỏ qua.
+Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images/layered assets, generated-image cache hoặc video final cũ. Chỉ tên khớp chính xác `FINAL_VIDEO_EN_<integer>.mp4` hoặc `FINAL_VIDEO_VI_<integer>.mp4` tham gia dãy tương ứng.
+
+## Pause-aware transition, SFX và watermark
+
+Scheduler chỉ xét major transition ở scene boundary sau khi final WAV đã được WhisperX align. Pause dưới `minimum_pause_ms` không nhận effect; pause đủ ngưỡng vẫn được chọn theo cadence deterministic để tránh spam. Transition bắt đầu trong pause hiện có và kết thúc đúng boundary, không thêm silence hoặc dịch word/narration. Internal phrase pause không kích hoạt page transition.
+
+Preset paper-documentary gồm `paper_swipe`, `paper_slide`, `paper_wipe` và `collage_push`. Local asset trong `assets/sfx` được trim, fade, delay đúng visual start và không loop. Nếu thiếu asset, visual vẫn render. Source Flow SFX được giữ riêng; transition SFX có conflict check và gain riêng. `work/diagnostics/transitions.json` liệt kê mọi boundary, pause, effect/SFX/no-effect và xác nhận narration timeline không đổi; `visual_freeze.json` phân cấp freeze-tail.
+
+Các section `transitions` và `watermark` trong `config.json` giữ threshold/duration/gain cùng text, opacity và safe margins. Watermark hiện dùng font file Windows rõ ràng để không phụ thuộc Fontconfig.
 
 ## Nhịp narration, forced alignment và subtitle
 

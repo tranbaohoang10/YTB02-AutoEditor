@@ -28,6 +28,10 @@ from .subtitles import (
     write_subtitle_diagnostics,
 )
 from .timing import build_timeline
+from .transitions import (
+    avoid_source_sfx_conflicts, build_transition_sfx_mix,
+    schedule_pause_aware_transitions, write_transition_diagnostics,
+)
 from .tts_bridge import generate_narration
 from .video_builder import (
     SourceAudioClip,
@@ -43,26 +47,44 @@ from .video_builder import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-FINAL_VIDEO_PATTERN = re.compile(r"FINAL_VIDEO_([0-9]+)\.mp4\Z")
+LEGACY_FINAL_VIDEO_PATTERN = re.compile(r"FINAL_VIDEO_([0-9]+)\.mp4\Z")
+LANGUAGE_FINAL_VIDEO_PATTERN = re.compile(r"FINAL_VIDEO_(EN|VI)_([0-9]+)\.mp4\Z")
 FINAL_VIDEO_RESERVATION_ATTEMPTS = 100
 
 
-def _existing_final_videos(output_dir: Path) -> list[tuple[int, Path]]:
+def _language_tag(language: str) -> str:
+    tag = language.upper()
+    if tag not in {"EN", "VI"}:
+        raise AutoEditorError("Output language hiện chỉ hỗ trợ EN hoặc VI.")
+    return tag
+
+
+def _existing_final_videos(
+    output_dir: Path, language: str | None = None,
+) -> list[tuple[int, Path]]:
     matches: list[tuple[int, Path]] = []
+    tag = _language_tag(language) if language is not None else None
     for path in output_dir.iterdir():
-        match = FINAL_VIDEO_PATTERN.fullmatch(path.name)
-        if match and path.is_file():
-            matches.append((int(match.group(1)), path))
+        if not path.is_file():
+            continue
+        language_match = LANGUAGE_FINAL_VIDEO_PATTERN.fullmatch(path.name)
+        if language_match and (tag is None or language_match.group(1) == tag):
+            matches.append((int(language_match.group(2)), path))
+            continue
+        legacy_match = LEGACY_FINAL_VIDEO_PATTERN.fullmatch(path.name)
+        if tag is None and legacy_match:
+            matches.append((int(legacy_match.group(1)), path))
     return matches
 
 
-def reserve_final_video_path(output_dir: Path) -> Path:
+def reserve_final_video_path(output_dir: Path, language: str | None = None) -> Path:
     """Atomically reserve the next max-plus-one final-video filename."""
     output_dir.mkdir(parents=True, exist_ok=True)
     for _ in range(FINAL_VIDEO_RESERVATION_ATTEMPTS):
-        existing = _existing_final_videos(output_dir)
+        existing = _existing_final_videos(output_dir, language)
         next_number = max((number for number, _ in existing), default=0) + 1
-        candidate = output_dir / f"FINAL_VIDEO_{next_number}.mp4"
+        prefix = f"FINAL_VIDEO_{_language_tag(language)}" if language else "FINAL_VIDEO"
+        candidate = output_dir / f"{prefix}_{next_number}.mp4"
         try:
             descriptor = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
@@ -74,8 +96,8 @@ def reserve_final_video_path(output_dir: Path) -> Path:
     )
 
 
-def latest_final_video_path(output_dir: Path) -> Path:
-    existing = _existing_final_videos(output_dir)
+def latest_final_video_path(output_dir: Path, language: str | None = None) -> Path:
+    existing = _existing_final_videos(output_dir, language)
     if not existing:
         raise AutoEditorError(f"Không tìm thấy video final trong: {output_dir}")
     return max(existing, key=lambda item: (item[0], item[1].name))[1]
@@ -100,7 +122,7 @@ def _clean_work_directory(work_dir: Path) -> tuple[Path, Path, Path, Path]:
         directory.mkdir(parents=True, exist_ok=True)
     for filename in (
         "tts_manifest.json", "video_concat.txt", "audio_concat.txt", "gap.wav",
-        "joined_video.mp4", "source_sfx.wav",
+        "joined_video.mp4", "source_sfx.wav", "transition_sfx.wav",
     ):
         path = work_dir / filename
         if path.is_file():
@@ -195,11 +217,25 @@ def write_freeze_diagnostics(
             probe_duration(asset.path, config.ffprobe) if asset.kind == "video" else target
         )
         freeze = max(0.0, target - source_duration)
+        if freeze < 0.3:
+            severity = "none"
+            recommendation = "no_concern"
+        elif freeze < 0.75:
+            severity = "subtle"
+            recommendation = "subtle_camera_motion_acceptable"
+        elif freeze < 1.5:
+            severity = "noticeable"
+            recommendation = "slow_push_or_transition_preparation"
+        else:
+            severity = "poor_source_coverage"
+            recommendation = "report_and_replace_or_extend_source"
         scenes.append({
             "scene_id": entry.scene.id, "asset_kind": asset.kind,
             "source_duration": round(source_duration, 6),
             "target_duration": round(target, 6),
             "freeze_duration": round(freeze, 6),
+            "severity": severity,
+            "recommendation": recommendation,
         })
     freezes = [float(scene["freeze_duration"]) for scene in scenes]
     payload: dict[str, object] = {
@@ -407,6 +443,9 @@ def run_pipeline(
         timeline, visual_durations, assets, config,
         work_dir / "diagnostics" / "visual_freeze.json",
     )
+    transition_decisions = schedule_pause_aware_transitions(
+        timeline, alignments, config.transitions
+    )
     prepared = _prepare_scenes(
         timeline, assets, scenes_dir, motion_dir, config, selected_motion_mode,
         ai_provider=ai_motion_provider,
@@ -415,12 +454,19 @@ def run_pipeline(
     )
     joined_video = work_dir / "joined_video.mp4"
     transitions: list[SceneTransition] = []
-    for scene in script.scenes[:-1]:
-        asset = assets[scene.id]
-        if asset.kind == "layered":
-            transitions.append(load_layered_manifest(asset.path).transition_out)
+    for index, scene in enumerate(script.scenes[:-1]):
+        decision = transition_decisions[index]
+        if config.transitions.pause_aware:
+            transitions.append(
+                SceneTransition(decision.effect, decision.visual_duration)
+                if decision.has_visual else SceneTransition()
+            )
         else:
-            transitions.append(SceneTransition())
+            asset = assets[scene.id]
+            transitions.append(
+                load_layered_manifest(asset.path).transition_out
+                if asset.kind == "layered" else SceneTransition()
+            )
     if any(transition.type != "none" for transition in transitions):
         concat_video_scenes_with_transitions(
             prepared, visual_durations, transitions, joined_video, config
@@ -434,6 +480,24 @@ def run_pipeline(
         source_audio_clips, source_sfx_path, total, config
     )
     print(f"       Source-video audio: {len(source_audio_clips)} scene(s) mixed")
+    transition_decisions = avoid_source_sfx_conflicts(
+        transition_decisions, source_sfx_path if has_source_sfx else None,
+        config.transitions,
+    )
+    transition_sfx_path = work_dir / "transition_sfx.wav"
+    has_transition_sfx = build_transition_sfx_mix(
+        transition_decisions, transition_sfx_path, total, config
+    )
+    transition_report = write_transition_diagnostics(
+        transition_decisions, timeline, alignments,
+        work_dir / "diagnostics" / "transitions.json",
+    )
+    print(
+        "       Pause-aware: "
+        f"{transition_report['eligible_pause_count']} eligible | "
+        f"{transition_report['visual_effect_count']} visual | "
+        f"{transition_report['transition_sfx_count']} transition SFX"
+    )
 
     print("[9/10] Creating stable phrase subtitles")
     phrases = create_subtitle_phrases(alignments, timeline, config.subtitles)
@@ -448,7 +512,7 @@ def run_pipeline(
         phrases, work_dir / "diagnostics" / "subtitles.json", config.subtitles
     )
 
-    final_path = reserve_final_video_path(output_dir)
+    final_path = reserve_final_video_path(output_dir, script.language)
     temporary = output_dir / f"{final_path.stem}.building.mp4"
     print(f"[10/10] Rendering {final_path.name}")
     try:
@@ -457,6 +521,7 @@ def run_pipeline(
         render_final_video(
             joined_video, voice_path, ass_path, temporary, config,
             source_sfx_path if has_source_sfx else None,
+            transition_sfx_path if has_transition_sfx else None,
         )
         atomic_replace_final(temporary, final_path)
     except BaseException:
