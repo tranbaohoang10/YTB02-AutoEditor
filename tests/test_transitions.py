@@ -43,8 +43,19 @@ class PauseAwareTransitionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = load_config(ROOT / "config.json")
 
-    def test_pause_below_threshold_has_no_transition(self) -> None:
+    def test_pause_between_180_and_250ms_uses_micro_bridge_only(self) -> None:
         timeline, alignments = _fixture(0.20)
+        decision = schedule_pause_aware_transitions(
+            timeline, alignments, self.config.transitions
+        )[0]
+        self.assertFalse(decision.eligible)
+        self.assertIn(decision.effect, {"micro_crossfade", "micro_push"})
+        self.assertTrue(decision.has_visual)
+        self.assertFalse(decision.has_sfx)
+        self.assertEqual(decision.reason, "micro_bridge")
+
+    def test_pause_below_180ms_keeps_plain_cut(self) -> None:
+        timeline, alignments = _fixture(0.14)
         decision = schedule_pause_aware_transitions(
             timeline, alignments, self.config.transitions
         )[0]
@@ -59,7 +70,7 @@ class PauseAwareTransitionTests(unittest.TestCase):
         )[0]
         self.assertTrue(decision.eligible)
         self.assertTrue(decision.has_visual)
-        self.assertEqual(decision.pause_class, "scene_boundary")
+        self.assertEqual(decision.pause_class, "long_bridge")
 
     def test_transition_fits_pause_and_does_not_change_narration_timeline(self) -> None:
         timeline, alignments = _fixture(0.38)
@@ -70,9 +81,35 @@ class PauseAwareTransitionTests(unittest.TestCase):
         )[0]
         self.assertLessEqual(decision.visual_duration, decision.pause_seconds)
         self.assertGreaterEqual(decision.visual_start, decision.pause_start)
-        self.assertAlmostEqual(decision.visual_start + decision.visual_duration,
-                               decision.pause_end)
+        self.assertGreater(decision.pre_roll_duration, 0)
+        self.assertGreater(decision.settle_duration, 0)
+        self.assertAlmostEqual(
+            decision.visual_start + decision.visual_duration, decision.visual_end
+        )
+        self.assertLessEqual(decision.visual_end, decision.pause_end)
+        self.assertAlmostEqual(
+            decision.visual_end + decision.settle_duration, decision.pause_end
+        )
         self.assertEqual(before, tuple((entry.start, entry.end) for entry in timeline))
+
+    def test_bridge_timestamps_are_quantized_to_30fps(self) -> None:
+        timeline, alignments = _fixture(0.35)
+        decision = schedule_pause_aware_transitions(
+            timeline, alignments, self.config.transitions, fps=30
+        )[0]
+        for value in (
+            decision.bridge_start, decision.visual_start, decision.visual_end,
+            decision.visual_duration, decision.settle_duration,
+        ):
+            self.assertAlmostEqual(value * 30, round(value * 30))
+
+    def test_long_pause_caps_transition_instead_of_stretching_it(self) -> None:
+        timeline, alignments = _fixture(0.80)
+        decision = schedule_pause_aware_transitions(
+            timeline, alignments, self.config.transitions
+        )[0]
+        self.assertLessEqual(decision.visual_duration, 0.35)
+        self.assertGreater(decision.pre_roll_duration, 0.30)
 
     def test_internal_pause_never_receives_major_transition(self) -> None:
         timeline, alignments = _fixture(0.20, internal_pause=0.35)
@@ -139,6 +176,16 @@ class PauseAwareTransitionTests(unittest.TestCase):
             )
         self.assertFalse(checked[0].has_sfx)
         self.assertEqual(checked[0].reason, "visual_only_source_sfx_conflict")
+
+    def test_missing_source_sfx_keeps_transition_accent(self) -> None:
+        timeline, alignments = _fixture(0.50)
+        decisions = schedule_pause_aware_transitions(
+            timeline, alignments, self.config.transitions
+        )
+        checked = avoid_source_sfx_conflicts(
+            decisions, None, self.config.transitions
+        )
+        self.assertTrue(checked[0].has_sfx)
 
     def test_diagnostics_reports_effect_and_untouched_counts(self) -> None:
         timeline, alignments = _fixture(0.50)

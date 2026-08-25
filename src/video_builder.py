@@ -23,6 +23,8 @@ _XFADE_TRANSITIONS = {
     "paper_slide": "slideleft",
     "paper_wipe": "wiperight",
     "collage_push": "slideright",
+    "micro_crossfade": "fade",
+    "micro_push": "smoothleft",
     "push_left": "slideleft",
     "push_right": "slideright",
     "zoom_fade": "zoomin",
@@ -183,24 +185,68 @@ def build_source_audio_mix(
 
 
 def prepare_video_scene(
-    source: Path, destination: Path, duration: float, config: AppConfig
+    source: Path, destination: Path, duration: float, config: AppConfig,
+    *, source_duration: float | None = None,
 ) -> None:
     video = config.video
-    vf = (
+    base = (
         f"scale={video.width}:{video.height}:force_original_aspect_ratio=decrease,"
         f"pad={video.width}:{video.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"fps={video.fps},"
-        f"tpad=stop_mode=clone:stop_duration={duration:.6f},"
-        f"trim=duration={duration:.6f},setpts=PTS-STARTPTS"
+        f"fps={video.fps}"
     )
     command = [
         config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(source), "-map", "0:v:0", "-an", "-vf", vf,
+        "-i", str(source),
+    ]
+    freeze_tail = (
+        max(0.0, duration - source_duration)
+        if source_duration is not None else 0.0
+    )
+    mask_threshold = config.transitions.freeze_tail_motion_start_ms / 1000.0
+    if source_duration is not None and freeze_tail > mask_threshold:
+        active_duration = min(duration, source_duration)
+        last_frame_start = max(0.0, active_duration - 1.0 / video.fps)
+        tail_frames = max(1, round(freeze_tail * video.fps))
+        zoom_amount = 0.012 if freeze_tail <= 0.5 else 0.020 if freeze_tail <= 0.9 else 0.028
+        direction = sum(source.name.encode("utf-8")) % 4
+        x_expression = (
+            "0" if direction == 0 else
+            "iw-iw/zoom" if direction == 1 else
+            "(iw-iw/zoom)/2"
+        )
+        y_expression = (
+            "0" if direction == 2 else
+            "ih-ih/zoom" if direction == 3 else
+            "(ih-ih/zoom)/2"
+        )
+        graph = (
+            f"[0:v]{base},split=2[activebase][tailbase];"
+            f"[activebase]trim=duration={active_duration:.6f},"
+            "setpts=PTS-STARTPTS[active];"
+            f"[tailbase]trim=start={last_frame_start:.6f}:duration={1 / video.fps:.6f},"
+            "setpts=PTS-STARTPTS,"
+            f"tpad=stop_mode=clone:stop_duration={freeze_tail:.6f},"
+            f"trim=duration={freeze_tail:.6f},"
+            f"zoompan=z='1+{zoom_amount:.6f}*(on+1)/{tail_frames}':"
+            f"x='{x_expression}':y='{y_expression}':d=1:"
+            f"s={video.width}x{video.height}:fps={video.fps},"
+            "setpts=PTS-STARTPTS[tail];"
+            f"[active][tail]concat=n=2:v=1:a=0,trim=duration={duration:.6f},"
+            "setpts=PTS-STARTPTS[vout]"
+        )
+        command.extend(["-filter_complex", graph, "-map", "[vout]", "-an"])
+    else:
+        vf = (
+            f"{base},tpad=stop_mode=clone:stop_duration={duration:.6f},"
+            f"trim=duration={duration:.6f},setpts=PTS-STARTPTS"
+        )
+        command.extend(["-map", "0:v:0", "-an", "-vf", vf])
+    command.extend([
         "-c:v", video.codec, "-crf", str(video.crf), "-preset", video.preset,
         "-pix_fmt", "yuv420p", "-color_range", "tv", "-colorspace", "bt709",
         "-color_primaries", "bt709", "-color_trc", "bt709", "-r", str(video.fps),
         "-video_track_timescale", "90000", str(destination),
-    ]
+    ])
     run_media_command(command, f"chuẩn bị clip {source.name}")
 
 
@@ -232,17 +278,21 @@ def concat_video_scenes_with_transitions(
         command.extend(["-i", str(path)])
     filters: list[str] = []
     effective_durations: list[float] = []
+    incoming_advances: list[float] = []
     frame_duration = 1.0 / config.video.fps
     for index, duration in enumerate(durations):
         if index < len(transitions):
             transition = transitions[index]
             transition_duration = transition.duration if transition.type != "none" else frame_duration
-            if transition_duration >= duration or transition_duration >= durations[index + 1]:
+            settle_duration = transition.settle if transition.type != "none" else 0.0
+            incoming_advance = transition_duration + settle_duration
+            if incoming_advance >= duration or incoming_advance >= durations[index + 1]:
                 raise AutoEditorError(
                     f"Transition scene {index + 1} phải ngắn hơn cả hai scene kề nhau."
                 )
             effective_durations.append(transition_duration)
-        incoming_pad = effective_durations[index - 1] if index > 0 else 0.0
+            incoming_advances.append(incoming_advance)
+        incoming_pad = incoming_advances[index - 1] if index > 0 else 0.0
         tail = (
             f",tpad=stop_mode=clone:stop_duration={incoming_pad:.6f}"
             if incoming_pad > 0 else ""
@@ -255,9 +305,10 @@ def concat_video_scenes_with_transitions(
     boundary = durations[0]
     for index, transition in enumerate(transitions, 1):
         transition_duration = effective_durations[index - 1]
+        settle_duration = transition.settle if transition.type != "none" else 0.0
         name = _XFADE_TRANSITIONS[transition.type]
         output = f"x{index}"
-        offset = boundary - transition_duration
+        offset = boundary - transition_duration - settle_duration
         filters.append(
             f"[{previous}][v{index}]xfade=transition={name}:"
             f"duration={transition_duration:.6f}:offset={offset:.6f}[{output}]"

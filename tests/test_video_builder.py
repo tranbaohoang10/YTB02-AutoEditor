@@ -175,6 +175,51 @@ class VideoBuilderTests(unittest.TestCase):
         graph = run.call_args.args[0][run.call_args.args[0].index("-filter_complex") + 1]
         self.assertIn("duration=0.033333:offset=0.966667", graph)
 
+    def test_transition_settle_reveals_new_scene_before_narration_boundary(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            concat_video_scenes_with_transitions(
+                (root / "a.mp4", root / "b.mp4"), (2.0, 3.0),
+                (SceneTransition("paper_swipe", 0.20, 0.066667),),
+                root / "out.mp4", config,
+            )
+        graph = run.call_args.args[0][run.call_args.args[0].index("-filter_complex") + 1]
+        self.assertIn("stop_duration=0.266667", graph)
+        self.assertIn("duration=0.200000:offset=1.733333", graph)
+
+    def test_long_freeze_tail_uses_deterministic_zoom_pan_mask(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            prepare_video_scene(
+                root / "scene_07.mp4", root / "out.mp4", 5.2, config,
+                source_duration=4.0,
+            )
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("zoompan=", graph)
+        self.assertIn("concat=n=2:v=1:a=0", graph)
+        self.assertIn("trim=duration=5.200000", graph)
+
+    def test_short_freeze_tail_keeps_stable_clone_path(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            prepare_video_scene(
+                root / "scene_05.mp4", root / "out.mp4", 4.2, config,
+                source_duration=4.0,
+            )
+        command = run.call_args.args[0]
+        self.assertNotIn("-filter_complex", command)
+        self.assertIn("tpad=stop_mode=clone", command[command.index("-vf") + 1])
+
     def test_final_encode_signals_limited_bt709_contract(self) -> None:
         config = load_config(ROOT / "config.json")
         with tempfile.TemporaryDirectory() as directory, patch(
