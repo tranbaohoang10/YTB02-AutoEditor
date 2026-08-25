@@ -106,11 +106,18 @@ class WatermarkConfig:
 @dataclass(frozen=True)
 class TransitionConfig:
     pause_aware: bool
+    micro_pause_ms: int
     minimum_pause_ms: int
     preferred_trigger_ms: int
     strong_trigger_ms: int
+    micro_transition_min_ms: int
+    micro_transition_max_ms: int
     minimum_transition_ms: int
     max_transition_ms: int
+    transition_ratio: float
+    pre_roll_ratio: float
+    settle_ms: int
+    freeze_tail_motion_start_ms: int
     enable_visual: bool
     enable_sfx: bool
     style: str
@@ -287,13 +294,26 @@ def load_config(path: Path) -> AppConfig:
             ),
             transitions=TransitionConfig(
                 pause_aware=transition_pause_aware,
+                micro_pause_ms=int(transitions.get("micro_pause_ms", 180)),
                 minimum_pause_ms=int(transitions.get("minimum_pause_ms", 250)),
                 preferred_trigger_ms=int(transitions.get("preferred_trigger_ms", 300)),
                 strong_trigger_ms=int(transitions.get("strong_trigger_ms", 450)),
+                micro_transition_min_ms=int(
+                    transitions.get("micro_transition_min_ms", 140)
+                ),
+                micro_transition_max_ms=int(
+                    transitions.get("micro_transition_max_ms", 180)
+                ),
                 minimum_transition_ms=int(
                     transitions.get("minimum_transition_ms", 180)
                 ),
                 max_transition_ms=int(transitions.get("max_transition_ms", 350)),
+                transition_ratio=float(transitions.get("transition_ratio", 0.72)),
+                pre_roll_ratio=float(transitions.get("pre_roll_ratio", 0.15)),
+                settle_ms=int(transitions.get("settle_ms", 33)),
+                freeze_tail_motion_start_ms=int(
+                    transitions.get("freeze_tail_motion_start_ms", 250)
+                ),
                 enable_visual=transition_visual,
                 enable_sfx=transition_sfx,
                 style=str(transitions.get("style", "paper_documentary")),
@@ -414,6 +434,14 @@ def load_config(path: Path) -> AppConfig:
     )
     if not 0 < pause_thresholds[0] <= pause_thresholds[1] <= pause_thresholds[2]:
         raise AutoEditorError("Các ngưỡng pause transition phải tăng dần và > 0.")
+    if not 0 < result.transitions.micro_pause_ms <= result.transitions.minimum_pause_ms:
+        raise AutoEditorError("micro_pause_ms phải > 0 và không vượt minimum_pause_ms.")
+    if not (
+        1 <= result.transitions.micro_transition_min_ms
+        <= result.transitions.micro_transition_max_ms
+        <= result.transitions.minimum_transition_ms
+    ):
+        raise AutoEditorError("Transition micro phải tăng dần và không vượt minimum_transition_ms.")
     if not (
         1 <= result.transitions.minimum_transition_ms
         <= result.transitions.max_transition_ms
@@ -422,6 +450,14 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("Transition duration phải tăng dần trong 1..1000 ms.")
     if result.transitions.minimum_transition_ms > result.transitions.minimum_pause_ms:
         raise AutoEditorError("minimum_transition_ms không được vượt minimum_pause_ms.")
+    if not 0.5 <= result.transitions.transition_ratio <= 0.85:
+        raise AutoEditorError("transition_ratio phải trong khoảng 0.5..0.85.")
+    if not 0.10 <= result.transitions.pre_roll_ratio <= 0.35:
+        raise AutoEditorError("pre_roll_ratio phải trong khoảng 0.10..0.35.")
+    if not 0 <= result.transitions.settle_ms <= 150:
+        raise AutoEditorError("settle_ms phải trong khoảng 0..150 ms.")
+    if not 0 <= result.transitions.freeze_tail_motion_start_ms <= 900:
+        raise AutoEditorError("freeze_tail_motion_start_ms phải trong khoảng 0..900 ms.")
     if not -60.0 <= result.transitions.sfx_gain_db <= 0.0:
         raise AutoEditorError("transitions.sfx_gain_db phải trong khoảng -60..0 dB.")
     if not 0 <= result.transitions.sfx_fade_ms <= 250:

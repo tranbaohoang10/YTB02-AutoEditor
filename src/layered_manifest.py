@@ -63,6 +63,7 @@ class CameraMotion:
 class SceneTransition:
     type: str = "none"
     duration: float = 0.0
+    settle: float = 0.0
 
 
 @dataclass(frozen=True)

@@ -165,7 +165,10 @@ def _prepare_scenes(
         asset = assets[entry.scene.id]
         print(f"       Scene {entry.scene.id:02d} {asset.kind} -> {target_duration:.2f} sec")
         if asset.kind == "video":
-            prepare_video_scene(asset.path, destination, target_duration, config)
+            prepare_video_scene(
+                asset.path, destination, target_duration, config,
+                source_duration=probe_duration(asset.path, config.ffprobe),
+            )
         elif asset.kind == "layered":
             manifest = load_layered_manifest(
                 asset.path, expected_width=config.video.width,
@@ -217,23 +220,27 @@ def write_freeze_diagnostics(
             probe_duration(asset.path, config.ffprobe) if asset.kind == "video" else target
         )
         freeze = max(0.0, target - source_duration)
-        if freeze < 0.3:
+        masks_tail = freeze > config.transitions.freeze_tail_motion_start_ms / 1000.0
+        if freeze <= 0.25:
             severity = "none"
             recommendation = "no_concern"
-        elif freeze < 0.75:
+        elif freeze <= 0.5:
             severity = "subtle"
-            recommendation = "subtle_camera_motion_acceptable"
-        elif freeze < 1.5:
+            recommendation = "tiny_continuing_push"
+        elif freeze <= 0.9:
             severity = "noticeable"
-            recommendation = "slow_push_or_transition_preparation"
+            recommendation = "stronger_slow_push"
         else:
             severity = "poor_source_coverage"
-            recommendation = "report_and_replace_or_extend_source"
+            recommendation = "masked_but_report_insufficient_coverage"
         scenes.append({
             "scene_id": entry.scene.id, "asset_kind": asset.kind,
             "source_duration": round(source_duration, 6),
             "target_duration": round(target, 6),
             "freeze_duration": round(freeze, 6),
+            "tail_motion_masked": masks_tail,
+            "tail_motion": "deterministic_subtle_zoom_pan" if masks_tail else "none",
+            "insufficient_coverage": freeze > 0.9,
             "severity": severity,
             "recommendation": recommendation,
         })
@@ -242,6 +249,7 @@ def write_freeze_diagnostics(
         "scene_count": len(scenes),
         "maximum_freeze": round(max(freezes), 6) if freezes else 0.0,
         "over_750ms": sum(value > 0.75 for value in freezes),
+        "over_900ms": sum(value > 0.9 for value in freezes),
         "over_1500ms": sum(value > 1.5 for value in freezes),
         "over_2000ms": sum(value > 2.0 for value in freezes),
         "scenes": scenes,
@@ -444,7 +452,7 @@ def run_pipeline(
         work_dir / "diagnostics" / "visual_freeze.json",
     )
     transition_decisions = schedule_pause_aware_transitions(
-        timeline, alignments, config.transitions
+        timeline, alignments, config.transitions, fps=config.video.fps
     )
     prepared = _prepare_scenes(
         timeline, assets, scenes_dir, motion_dir, config, selected_motion_mode,
@@ -458,7 +466,9 @@ def run_pipeline(
         decision = transition_decisions[index]
         if config.transitions.pause_aware:
             transitions.append(
-                SceneTransition(decision.effect, decision.visual_duration)
+                SceneTransition(
+                    decision.effect, decision.visual_duration, decision.settle_duration
+                )
                 if decision.has_visual else SceneTransition()
             )
         else:

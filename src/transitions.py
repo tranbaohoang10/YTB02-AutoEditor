@@ -14,7 +14,8 @@ from .ffmpeg_utils import probe_audio_duration, run_media_command
 from .models import AutoEditorError, SceneAlignment, TimelineEntry, WordTiming
 
 
-PAPER_PRESETS = ("paper_swipe", "paper_slide", "paper_wipe", "collage_push")
+PAPER_PRESETS = ("paper_swipe", "collage_push", "paper_wipe")
+MICRO_PRESETS = ("micro_crossfade", "micro_push")
 SFX_PREFIXES = {
     "paper_swipe": ("paper_swipe", "paper_rustle", "page_turn"),
     "paper_slide": ("paper_swipe", "soft_whoosh", "paper_rustle"),
@@ -35,8 +36,12 @@ class PauseTransition:
     pause_class: str
     eligible: bool
     effect: str
+    bridge_start: float | None
     visual_start: float | None
+    visual_end: float | None
     visual_duration: float
+    pre_roll_duration: float
+    settle_duration: float
     sfx_path: Path | None
     sfx_start: float | None
     source_rms_db: float | None = None
@@ -71,7 +76,15 @@ def _pause_class(seconds: float, *, boundary: bool) -> str:
     if seconds > 0.7:
         return "long_abnormal_dead_air"
     if boundary:
-        return "scene_boundary"
+        if seconds < 0.18:
+            return "short_cut"
+        if seconds < 0.25:
+            return "micro_bridge"
+        if seconds < 0.38:
+            return "documentary_bridge"
+        if seconds < 0.50:
+            return "full_bridge"
+        return "long_bridge"
     if seconds >= 0.3:
         return "sentence_ending"
     return "internal_phrase"
@@ -114,15 +127,49 @@ def _should_select(boundary_index: int, pause_ms: float, config: TransitionConfi
     return boundary_index % 5 == 0
 
 
+def _adapt_transition_ms(pause_ms: float, config: TransitionConfig) -> int:
+    if pause_ms < config.minimum_pause_ms:
+        return min(
+            config.micro_transition_max_ms,
+            max(config.micro_transition_min_ms, round(pause_ms * config.transition_ratio)),
+        )
+    if pause_ms < 380:
+        return min(
+            300,
+            max(config.minimum_transition_ms, round(pause_ms * config.transition_ratio)),
+        )
+    if pause_ms < 500:
+        return min(
+            340,
+            max(280, round(pause_ms * config.transition_ratio)),
+        )
+    return min(config.max_transition_ms, 340)
+
+
+def _effect_for_boundary(
+    boundary_index: int, pause_ms: float, config: TransitionConfig,
+) -> tuple[str, bool]:
+    """Return a deterministic bridge preset and whether it merits an SFX accent."""
+    if pause_ms < config.minimum_pause_ms:
+        return MICRO_PRESETS[boundary_index % len(MICRO_PRESETS)], False
+    noticeable = _should_select(boundary_index, pause_ms, config)
+    if noticeable:
+        return PAPER_PRESETS[(boundary_index * 5 + 1) % len(PAPER_PRESETS)], True
+    return MICRO_PRESETS[boundary_index % len(MICRO_PRESETS)], False
+
+
 def schedule_pause_aware_transitions(
     timeline: Sequence[TimelineEntry], alignments: Sequence[SceneAlignment],
-    config: TransitionConfig,
+    config: TransitionConfig, *, fps: int = 30,
 ) -> tuple[PauseTransition, ...]:
-    """Schedule deterministic effects wholly inside existing narration pauses.
+    """Schedule deterministic bridges wholly inside existing narration pauses.
 
-    The visual transition always ends at the existing next-scene boundary. This
-    function never changes a TimelineEntry and therefore cannot delay narration.
+    The main transition begins after a short pre-roll and ends before a one- or
+    two-frame settle. This function never changes a TimelineEntry and therefore
+    cannot delay narration.
     """
+    if fps <= 0:
+        raise AutoEditorError("FPS transition phải > 0.")
     if len(timeline) < 2:
         return ()
     by_scene = {alignment.scene_id: alignment for alignment in alignments}
@@ -144,40 +191,77 @@ def schedule_pause_aware_transitions(
         pause = max(0.0, next_start - previous_end)
         pause_ms = pause * 1000.0
         eligible = config.pause_aware and pause_ms >= config.minimum_pause_ms
-        selected = eligible and config.enable_visual and _should_select(
-            boundary_index, pause_ms, config
+        bridge = (
+            config.pause_aware and config.enable_visual
+            and pause_ms >= config.micro_pause_ms
         )
         if not config.pause_aware:
             reason = "pause_aware_disabled"
-        elif pause_ms < config.minimum_pause_ms:
+        elif pause_ms < config.micro_pause_ms:
             reason = "below_threshold"
         elif not config.enable_visual:
             reason = "visual_disabled"
-        elif not selected:
-            reason = "intentionally_unselected"
+        elif pause_ms < config.minimum_pause_ms:
+            reason = "micro_bridge"
         else:
-            reason = "scheduled"
-        effect = (
-            PAPER_PRESETS[
-                (boundary_index // 2 + (boundary_index % 2) * 2) % len(PAPER_PRESETS)
-            ]
-            if selected else "none"
+            reason = "continuity_bridge"
+        effect, accented = (
+            _effect_for_boundary(boundary_index, pause_ms, config)
+            if bridge else ("none", False)
         )
         duration = 0.0
+        bridge_start: float | None = None
         visual_start: float | None = None
-        if selected:
-            duration_ms = min(
-                config.max_transition_ms,
-                max(config.minimum_transition_ms, round(pause_ms * 0.8)),
-                math.floor(pause_ms),
-            )
-            duration = duration_ms / 1000.0
-            visual_start = next_start - duration
-            if visual_start < previous_end - 1e-6:
+        visual_end: float | None = None
+        pre_roll_duration = 0.0
+        settle_duration = 0.0
+        if bridge:
+            pause_start_frame = math.ceil(previous_end * fps - 1e-9)
+            boundary_frame = round(next_start * fps)
+            available_frames = boundary_frame - pause_start_frame
+            if available_frames < 3:
+                bridge = False
+                effect = "none"
+                accented = False
+                reason = "insufficient_frame_window"
+            else:
+                settle_frames = max(1, round(config.settle_ms * fps / 1000.0))
+                settle_frames = min(settle_frames, max(1, available_frames // 4))
+                pre_roll_frames = (
+                    0 if pause_ms < config.minimum_pause_ms
+                    else max(1, math.floor(available_frames * config.pre_roll_ratio))
+                )
+                requested_raw = _adapt_transition_ms(pause_ms, config) * fps / 1000.0
+                requested_frames = max(
+                    1,
+                    round(requested_raw)
+                    if pause_ms < config.minimum_pause_ms
+                    else math.ceil(requested_raw - 1e-9),
+                )
+                requested_frames = min(
+                    requested_frames,
+                    max(1, math.floor(config.max_transition_ms * fps / 1000.0)),
+                )
+                maximum_transition_frames = available_frames - pre_roll_frames - settle_frames
+                if maximum_transition_frames < 1:
+                    pre_roll_frames = 0
+                    maximum_transition_frames = available_frames - pre_roll_frames - settle_frames
+                duration_frames = min(requested_frames, maximum_transition_frames)
+                transition_end_frame = boundary_frame - settle_frames
+                transition_start_frame = transition_end_frame - duration_frames
+                bridge_start = pause_start_frame / fps
+                visual_start = transition_start_frame / fps
+                visual_end = transition_end_frame / fps
+                duration = duration_frames / fps
+                pre_roll_duration = (transition_start_frame - pause_start_frame) / fps
+                settle_duration = settle_frames / fps
+            if bridge and visual_start is not None and visual_start < previous_end - 1e-6:
                 raise AutoEditorError("Transition vượt ra ngoài narration pause hiện có.")
-        sfx_path = _select_sfx(effect, boundary_index, assets) if selected else None
+        sfx_path = (
+            _select_sfx(effect, boundary_index, assets) if bridge and accented else None
+        )
         sfx_start = visual_start if sfx_path is not None else None
-        if selected and config.enable_sfx and sfx_path is None:
+        if bridge and accented and config.enable_sfx and sfx_path is None:
             reason = "scheduled_visual_missing_sfx"
         decisions.append(PauseTransition(
             boundary_index=boundary_index,
@@ -190,8 +274,12 @@ def schedule_pause_aware_transitions(
             pause_class=_pause_class(pause, boundary=True),
             eligible=eligible,
             effect=effect,
+            bridge_start=bridge_start,
             visual_start=visual_start,
+            visual_end=visual_end,
             visual_duration=duration,
+            pre_roll_duration=pre_roll_duration,
+            settle_duration=settle_duration,
             sfx_path=sfx_path,
             sfx_start=sfx_start,
             reason=reason,
@@ -357,11 +445,21 @@ def write_transition_diagnostics(
             "class": decision.pause_class,
             "eligible": decision.eligible,
             "effect": decision.effect,
+            "bridge_start": (
+                round(decision.bridge_start, 6)
+                if decision.bridge_start is not None else None
+            ),
             "visual_start": (
                 round(decision.visual_start, 6)
                 if decision.visual_start is not None else None
             ),
+            "visual_end": (
+                round(decision.visual_end, 6)
+                if decision.visual_end is not None else None
+            ),
             "visual_duration_ms": round(decision.visual_duration * 1000),
+            "pre_roll_ms": round(decision.pre_roll_duration * 1000),
+            "settle_ms": round(decision.settle_duration * 1000),
             "sfx": decision.sfx_path.name if decision.sfx_path else None,
             "sfx_start": round(decision.sfx_start, 6) if decision.sfx_start else None,
             "source_rms_db": (

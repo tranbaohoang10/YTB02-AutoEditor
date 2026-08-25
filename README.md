@@ -203,7 +203,7 @@ Script V1 tiếp tục hoạt động:
 }
 ```
 
-Copy clip vào `input\videos`. Clip dài hơn narration bị trim; clip ngắn hơn được freeze frame cuối. Video được scale giữ tỷ lệ và pad về canvas. Nếu clip có audio stream, pipeline lấy phần audio trong thời lượng thật của clip, fade in/out nhẹ và mix làm ambient/transition/paper/whoosh SFX; audio không loop khi phần hình bị freeze. Clip không có audio vẫn build bình thường.
+Copy clip vào `input\videos`. Clip dài hơn narration bị trim. Với clip ngắn hơn, freeze tail trên ngưỡng cấu hình được che bằng tiny zoom/pan deterministic; nội dung ảnh không bị sinh thêm hoặc biến đổi generative. Video được scale giữ tỷ lệ và pad về canvas. Nếu clip có audio stream, pipeline lấy phần audio trong thời lượng thật của clip, fade in/out nhẹ và mix làm ambient/transition/paper/whoosh SFX; audio không loop khi phần hình kéo dài. Clip không có audio vẫn build bình thường.
 
 Các mặc định audio quan trọng trong `config.json`:
 
@@ -306,9 +306,17 @@ Rerun chỉ dọn intermediate build folders trong `work`; không xóa input cli
 
 ## Pause-aware transition, SFX và watermark
 
-Scheduler chỉ xét major transition ở scene boundary sau khi final WAV đã được WhisperX align. Pause dưới `minimum_pause_ms` không nhận effect; pause đủ ngưỡng vẫn được chọn theo cadence deterministic để tránh spam. Transition bắt đầu trong pause hiện có và kết thúc đúng boundary, không thêm silence hoặc dịch word/narration. Internal phrase pause không kích hoạt page transition.
+Scheduler chỉ xét transition ở scene boundary sau khi final WAV đã được WhisperX align. Pause dưới `micro_pause_ms` giữ cut ngắn; pause 180–250 ms nhận micro bridge; pause từ 250 ms nhận continuity bridge. Cadence deterministic chỉ dùng paper/collage rõ ở một phần boundary, còn lại dùng micro push/crossfade để tránh spam. Mỗi bridge có pre-roll, main transition và settle được lượng tử hóa theo 30 fps, nằm hoàn toàn trong pause hiện có và không thêm silence hoặc dịch word/narration. Internal phrase pause không kích hoạt transition.
 
-Preset paper-documentary gồm `paper_swipe`, `paper_slide`, `paper_wipe` và `collage_push`. Local asset trong `assets/sfx` được trim, fade, delay đúng visual start và không loop. Nếu thiếu asset, visual vẫn render. Source Flow SFX được giữ riêng; transition SFX có conflict check và gain riêng. `work/diagnostics/transitions.json` liệt kê mọi boundary, pause, effect/SFX/no-effect và xác nhận narration timeline không đổi; `visual_freeze.json` phân cấp freeze-tail.
+Preset paper-documentary gồm `paper_swipe`, `paper_wipe`, `collage_push`, `micro_crossfade` và `micro_push`. Local asset trong `assets/sfx` được trim, fade, delay đúng visual start và không loop. Nếu thiếu asset, visual vẫn render. Source Flow SFX được giữ riêng; transition SFX có conflict check và gain riêng. `work/diagnostics/transitions.json` liệt kê pre-roll/transition/settle và xác nhận narration timeline không đổi; `visual_freeze.json` phân cấp/mô tả masking freeze-tail.
+
+Đo continuity trên final video bằng:
+
+```powershell
+.venv\Scripts\python.exe tools\analyze_visual_continuity.py output\FINAL_VIDEO_EN_4.mp4 --transitions work\diagnostics\transitions.json --freeze work\diagnostics\visual_freeze.json --json work\diagnostics\visual_continuity_en.json
+```
+
+Verifier decode vùng hình phía trên subtitle/watermark, dùng mean absolute frame delta với ngưỡng chống codec noise, rồi báo `static_before_ms`, `transition_motion_ms`, `settle_ms` và `static_dead_zone_ms` cho từng boundary.
 
 Các section `transitions` và `watermark` trong `config.json` giữ threshold/duration/gain cùng text, opacity và safe margins. Watermark hiện dùng font file Windows rõ ràng để không phụ thuộc Fontconfig.
 

@@ -21,7 +21,7 @@ from src.media_qc import probe_video
 from src.video_builder import (
     SourceAudioClip, build_source_audio_mix, concat_audio_scenes,
     concat_video_scenes_with_transitions, render_final_video,
-    trim_narration_padding,
+    prepare_video_scene, trim_narration_padding,
 )
 
 
@@ -192,6 +192,99 @@ class RealMediaSmokeTests(unittest.TestCase):
         self.assertEqual(info["color_range"], "tv")
         self.assertEqual(info["r_frame_rate"], "30/1")
         self.assertLessEqual(abs(info["duration"] - 2.4), 1 / 30 + 0.01)
+
+    def test_real_freeze_tail_mask_keeps_motion_without_black_frames(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe")
+        self.assertIsNotNone(ffmpeg)
+        self.assertIsNotNone(ffprobe)
+        config = load_config(ROOT / "config.json")
+        config = replace(
+            config, ffmpeg=ffmpeg, ffprobe=ffprobe,
+            video=replace(config.video, width=320, height=180, preset="ultrafast"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.mp4"
+            output = root / "masked.mp4"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=0.5",
+                "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", str(source),
+            ], check=True)
+            prepare_video_scene(
+                source, output, 1.2, config, source_duration=0.5,
+            )
+            frames: list[Image.Image] = []
+            for index, timestamp in enumerate((0.80, 1.00)):
+                frame = root / f"tail_{index}.png"
+                subprocess.run([
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-ss", f"{timestamp:.2f}", "-i", str(output),
+                    "-frames:v", "1", "-update", "1", str(frame),
+                ], check=True)
+                frames.append(Image.open(frame).convert("RGB"))
+            difference = sum(
+                abs(left - right)
+                for pixel_a, pixel_b in zip(frames[0].getdata(), frames[1].getdata())
+                for left, right in zip(pixel_a, pixel_b)
+            )
+            minimum_brightness = min(
+                sum(sum(pixel) for pixel in frame.getdata()) / (320 * 180 * 3)
+                for frame in frames
+            )
+            info = probe_video(output, ffprobe)
+            for frame in frames:
+                frame.close()
+        self.assertGreater(difference, 50_000)
+        self.assertGreater(minimum_brightness, 0)
+        self.assertLessEqual(abs(info["duration"] - 1.2), 1 / 30 + 0.01)
+
+    def test_real_micro_push_has_monotonic_frames_and_no_black_flash(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe")
+        self.assertIsNotNone(ffmpeg)
+        self.assertIsNotNone(ffprobe)
+        config = load_config(ROOT / "config.json")
+        config = replace(
+            config, ffmpeg=ffmpeg, ffprobe=ffprobe,
+            video=replace(config.video, width=320, height=180, preset="ultrafast"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scenes = (root / "left.mp4", root / "right.mp4")
+            for scene, color in zip(scenes, ("maroon", "navy")):
+                subprocess.run([
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", f"color=c={color}:s=320x180:r=30:d=1",
+                    "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", str(scene),
+                ], check=True)
+            output = root / "micro.mp4"
+            concat_video_scenes_with_transitions(
+                scenes, (1.0, 1.0),
+                (SceneTransition("micro_push", 0.166667, 0.033333),),
+                output, config,
+            )
+            probe = subprocess.run([
+                ffprobe, "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "frame=best_effort_timestamp_time",
+                "-of", "csv=p=0", str(output),
+            ], check=True, capture_output=True, text=True, encoding="utf-8")
+            timestamps = [
+                float(value.rstrip(",")) for value in probe.stdout.splitlines() if value
+            ]
+            sample = root / "transition.png"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", "0.90", "-i", str(output), "-frames:v", "1",
+                "-update", "1", str(sample),
+            ], check=True)
+            with Image.open(sample).convert("RGB") as image:
+                average = sum(sum(pixel) for pixel in image.getdata()) / (320 * 180 * 3)
+        self.assertTrue(all(right > left for left, right in zip(timestamps, timestamps[1:])))
+        self.assertGreater(average, 3.0)
 
     def test_real_layered_scene_and_two_scene_transition(self) -> None:
         ffmpeg = shutil.which("ffmpeg")
