@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,10 @@ from .video_builder import (
     process_narration_audio,
     render_final_video,
     trim_narration_padding,
+)
+from .visual_quality import (
+    SceneVisualProfile, analyze_video_profile, neutral_visual_profile,
+    write_visual_profile_diagnostics,
 )
 
 
@@ -152,6 +157,7 @@ def _prepare_scenes(
     scenes_dir: Path, motion_dir: Path, config: AppConfig,
     motion_mode: str, *, ai_provider: Any = None, fallback_local: bool = False,
     visual_durations: tuple[float, ...] | None = None,
+    visual_profiles: dict[int, SceneVisualProfile] | None = None,
 ) -> list[Path]:
     results: list[Path] = []
     gap = config.audio.gap_ms / 1000.0
@@ -168,6 +174,7 @@ def _prepare_scenes(
             prepare_video_scene(
                 asset.path, destination, target_duration, config,
                 source_duration=probe_duration(asset.path, config.ffprobe),
+                visual_profile=(visual_profiles or {}).get(entry.scene.id),
             )
         elif asset.kind == "layered":
             manifest = load_layered_manifest(
@@ -184,6 +191,31 @@ def _prepare_scenes(
             shutil.copy2(motion_output, destination)
         results.append(destination)
     return results
+
+
+def _analyze_visual_profiles(
+    timeline: tuple[TimelineEntry, ...], assets: dict[int, VisualAsset],
+    config: AppConfig, diagnostics_path: Path,
+) -> dict[int, SceneVisualProfile]:
+    profiles: dict[int, SceneVisualProfile] = {}
+    for entry in timeline:
+        asset = assets[entry.scene.id]
+        if asset.kind == "video" and config.visual_quality.enabled:
+            source_duration = probe_duration(asset.path, config.ffprobe)
+            profiles[entry.scene.id] = replace(
+                analyze_video_profile(
+                    entry.scene.id, asset.path, source_duration, config,
+                ),
+                coverage_shortfall=round(
+                    max(0.0, entry.duration - source_duration), 6
+                ),
+            )
+        else:
+            profiles[entry.scene.id] = neutral_visual_profile(
+                entry.scene.id, asset.kind
+            )
+    write_visual_profile_diagnostics(tuple(profiles.values()), diagnostics_path)
+    return profiles
 
 
 def quantize_visual_durations(
@@ -447,18 +479,30 @@ def run_pipeline(
             script.visual.motion_provider, script.visual.motion_model
         )
     visual_durations = quantize_visual_durations(timeline, config.video.fps)
+    visual_profiles = _analyze_visual_profiles(
+        timeline, assets, config,
+        work_dir / "diagnostics" / "visual_profiles.json",
+    )
+    print(
+        "       Visual profiles: "
+        f"{sum(profile.motion_class == 'low' for profile in visual_profiles.values())} low-motion | "
+        f"{sum(profile.density_class == 'high' for profile in visual_profiles.values())} high-density | "
+        f"{sum(profile.cleanup_required for profile in visual_profiles.values())} source cleanup"
+    )
     write_freeze_diagnostics(
         timeline, visual_durations, assets, config,
         work_dir / "diagnostics" / "visual_freeze.json",
     )
     transition_decisions = schedule_pause_aware_transitions(
-        timeline, alignments, config.transitions, fps=config.video.fps
+        timeline, alignments, config.transitions, fps=config.video.fps,
+        visual_profiles=visual_profiles,
     )
     prepared = _prepare_scenes(
         timeline, assets, scenes_dir, motion_dir, config, selected_motion_mode,
         ai_provider=ai_motion_provider,
         fallback_local=script.visual.ai_fallback_local,
         visual_durations=visual_durations,
+        visual_profiles=visual_profiles,
     )
     joined_video = work_dir / "joined_video.mp4"
     transitions: list[SceneTransition] = []

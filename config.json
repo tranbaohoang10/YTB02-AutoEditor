@@ -70,9 +70,12 @@
   },
   "subtitles": {
     "font": "Arial",
-    "font_size": 52,
-    "margin_bottom": 70,
-    "outline": 3,
+    "font_size": 56,
+    "margin_bottom": 78,
+    "outline": 4,
+    "bold": true,
+    "shadow": 0,
+    "margin_horizontal": 100,
     "max_chars_per_line": 42,
     "max_lines": 2,
     "max_words_per_window": 8,
@@ -82,18 +85,45 @@
     "max_hold_ms": 450,
     "cps_warning": 22.0
   },
+  "source_cleanup": {
+    "enabled": true,
+    "strategy": "safe_edge_crop",
+    "target": "gemini_flow_sparkle",
+    "x_ratio": 0.875,
+    "y_ratio": 0.764,
+    "width_ratio": 0.104167,
+    "height_ratio": 0.185185,
+    "median_radius": 60,
+    "feather_px": 3,
+    "crop_width_ratio": 0.885416667,
+    "crop_height_ratio": 0.885185185
+  },
+  "visual_quality": {
+    "enabled": true,
+    "analysis_width": 320,
+    "sample_frames": 6,
+    "low_motion_threshold": 0.09,
+    "high_density_threshold": 0.064,
+    "micro_motion_zoom": 0.01,
+    "hierarchy_contrast": 0.97,
+    "hierarchy_saturation": 0.92,
+    "hierarchy_brightness": 0.008,
+    "hierarchy_vignette_angle": 0.448799
+  },
   "watermark": {
     "enabled": true,
     "text": "l0ki",
     "position": "bottom_right",
     "font": "Arial",
     "font_file": "C:\\Windows\\Fonts\\arial.ttf",
-    "font_size": 28,
-    "opacity": 0.72,
-    "margin_right": 50,
-    "margin_bottom": 45,
+    "font_size": 34,
+    "opacity": 0.86,
+    "margin_right": 58,
+    "margin_bottom": 50,
     "shadow_x": 2,
-    "shadow_y": 2
+    "shadow_y": 2,
+    "border_width": 1,
+    "border_opacity": 0.72
   },
   "transitions": {
     "pause_aware": true,
@@ -113,7 +143,7 @@
     "enable_sfx": true,
     "style": "paper_documentary",
     "sfx_dir": "assets/sfx",
-    "sfx_gain_db": -19.0,
+    "sfx_gain_db": -21.5,
     "sfx_fade_ms": 30,
     "source_conflict_threshold_db": -40.0
   }

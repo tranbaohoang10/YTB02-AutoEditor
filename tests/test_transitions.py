@@ -14,6 +14,7 @@ from src.transitions import (
     avoid_source_sfx_conflicts, build_transition_sfx_mix,
     schedule_pause_aware_transitions, write_transition_diagnostics,
 )
+from src.visual_quality import SceneVisualProfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,16 +44,16 @@ class PauseAwareTransitionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.config = load_config(ROOT / "config.json")
 
-    def test_pause_between_180_and_250ms_uses_micro_bridge_only(self) -> None:
+    def test_pause_between_180_and_250ms_keeps_clean_cut(self) -> None:
         timeline, alignments = _fixture(0.20)
         decision = schedule_pause_aware_transitions(
             timeline, alignments, self.config.transitions
         )[0]
         self.assertFalse(decision.eligible)
-        self.assertIn(decision.effect, {"micro_crossfade", "micro_push"})
-        self.assertTrue(decision.has_visual)
+        self.assertEqual(decision.effect, "none")
+        self.assertFalse(decision.has_visual)
         self.assertFalse(decision.has_sfx)
-        self.assertEqual(decision.reason, "micro_bridge")
+        self.assertEqual(decision.reason, "preserve_short_cut")
 
     def test_pause_below_180ms_keeps_plain_cut(self) -> None:
         timeline, alignments = _fixture(0.14)
@@ -61,7 +62,43 @@ class PauseAwareTransitionTests(unittest.TestCase):
         )[0]
         self.assertFalse(decision.eligible)
         self.assertEqual(decision.effect, "none")
-        self.assertEqual(decision.reason, "below_threshold")
+        self.assertEqual(decision.reason, "preserve_short_cut")
+
+    def test_short_pause_softens_only_a_verified_freeze_tail_exit(self) -> None:
+        timeline, alignments = _fixture(0.20)
+        profiles = {
+            1: SceneVisualProfile(
+                1, "video", 0.04, 0.10, 0.03, "normal", "active", True, 0.4,
+            ),
+            2: SceneVisualProfile(
+                2, "video", 0.04, 0.10, 0.03, "normal", "active", True,
+            ),
+        }
+        decision = schedule_pause_aware_transitions(
+            timeline, alignments, self.config.transitions,
+            visual_profiles=profiles,
+        )[0]
+        self.assertEqual(decision.effect, "micro_crossfade")
+        self.assertEqual(decision.visual_intent, "freeze_tail_exit_soften")
+        self.assertFalse(decision.has_sfx)
+
+    def test_dense_to_dense_uses_micro_crossfade_not_push(self) -> None:
+        timeline, alignments = _fixture(0.40)
+        profiles = {
+            scene_id: SceneVisualProfile(
+                scene_id, "video", 0.08, 0.12, 0.03, "high", "active", True,
+            )
+            for scene_id in (1, 2)
+        }
+        decision = schedule_pause_aware_transitions(
+            timeline, alignments, self.config.transitions,
+            visual_profiles=profiles,
+        )[0]
+        self.assertEqual(decision.effect, "micro_crossfade")
+        self.assertEqual(
+            decision.visual_intent, "dense_to_dense_reduce_competition"
+        )
+        self.assertFalse(decision.has_sfx)
 
     def test_eligible_scene_boundary_is_a_transition_candidate(self) -> None:
         timeline, alignments = _fixture(0.50)
@@ -71,6 +108,16 @@ class PauseAwareTransitionTests(unittest.TestCase):
         self.assertTrue(decision.eligible)
         self.assertTrue(decision.has_visual)
         self.assertEqual(decision.pause_class, "long_bridge")
+
+    def test_eligible_subpreferred_pause_uses_sfx_free_micro_crossfade(self) -> None:
+        timeline, alignments = _fixture(0.28)
+        decision = schedule_pause_aware_transitions(
+            timeline, alignments, self.config.transitions
+        )[0]
+        self.assertTrue(decision.eligible)
+        self.assertEqual(decision.effect, "micro_crossfade")
+        self.assertEqual(decision.visual_intent, "short_pause_continuity")
+        self.assertFalse(decision.has_sfx)
 
     def test_transition_fits_pause_and_does_not_change_narration_timeline(self) -> None:
         timeline, alignments = _fixture(0.38)
@@ -153,7 +200,7 @@ class PauseAwareTransitionTests(unittest.TestCase):
         self.assertTrue(built)
         graph = run.call_args.args[0][run.call_args.args[0].index("-filter_complex") + 1]
         self.assertIn("atrim=start=0:duration=0.300000", graph)
-        self.assertIn("volume=-19.000dB", graph)
+        self.assertIn("volume=-21.500dB", graph)
         self.assertIn("afade=t=in", graph)
         self.assertIn("afade=t=out", graph)
         self.assertNotIn("aloop", graph)

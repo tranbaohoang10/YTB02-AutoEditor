@@ -24,13 +24,43 @@ def _select_boundaries(boundaries: list[dict[str, Any]]) -> list[tuple[str, dict
         boundaries, key=lambda item: item["available_narration_pause_ms"], reverse=True
     )
     chosen: list[tuple[str, dict[str, Any]]] = []
-    chosen.extend(("short", item) for item in short[:5])
-    chosen.extend(
-        ("medium", item) for item in sorted(
-            medium, key=lambda value: value["static_dead_zone_ms"], reverse=True
-        )[:5]
+    selected: set[tuple[int, int]] = set()
+
+    def add(category: str, candidates: Sequence[dict[str, Any]], limit: int) -> None:
+        for item in candidates:
+            key = (int(item["scene_from"]), int(item["scene_to"]))
+            if key in selected:
+                continue
+            chosen.append((category, item))
+            selected.add(key)
+            if sum(1 for name, _ in chosen if name == category) >= limit:
+                break
+
+    add("short", short, 5)
+    add(
+        "medium",
+        sorted(medium, key=lambda value: value["static_dead_zone_ms"], reverse=True),
+        5,
     )
-    chosen.extend(("longest", item) for item in longest[:3])
+    add("longest", longest, 3)
+
+    # Languages with slower delivery can have no short pauses at all. Fill the
+    # visual QA sample from the remaining highest-risk boundaries rather than
+    # failing because a pause class happens to be absent.
+    remaining = sorted(
+        boundaries,
+        key=lambda item: (
+            item["static_dead_zone_ms"], item["available_narration_pause_ms"]
+        ),
+        reverse=True,
+    )
+    for item in remaining:
+        if len(chosen) >= min(13, len(boundaries)):
+            break
+        key = (int(item["scene_from"]), int(item["scene_to"]))
+        if key not in selected:
+            chosen.append(("representative", item))
+            selected.add(key)
     return chosen
 
 
@@ -57,9 +87,10 @@ def extract_contact_sheets(
     video: Path, diagnostics: Path, output_dir: Path, *, ffmpeg: str = "ffmpeg",
 ) -> dict[str, Any]:
     payload = json.loads(diagnostics.read_text(encoding="utf-8-sig"))
-    selected = _select_boundaries(list(payload["boundaries"]))
-    if len(selected) < 13:
-        raise AutoEditorError("Không đủ 5 short + 5 medium + 3 longest boundary để QA.")
+    boundaries = list(payload["boundaries"])
+    selected = _select_boundaries(boundaries)
+    if len(selected) < min(13, len(boundaries)):
+        raise AutoEditorError("Không chọn đủ boundary đại diện để QA.")
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, Any]] = []
     for category, item in selected:

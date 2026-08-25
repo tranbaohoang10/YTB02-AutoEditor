@@ -164,6 +164,22 @@ class SubtitleTests(unittest.TestCase):
         self.assertEqual(diagnostics["phrase_count"], 1)
         self.assertEqual(diagnostics["phrases"][0]["hold_ms"], 300)
 
+    def test_readability_style_keeps_future_words_transparent(self) -> None:
+        timeline, alignments = sample_scene()
+        phrases = create_subtitle_phrases(alignments, timeline, CONFIG)
+        readable = SubtitleConfig(
+            "Arial", 56, 78, 4, 42, 2, 8, 4, 8, 250, 450, 22.0,
+            True, 2, 100,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "readable.ass"
+            write_phrase_ass(phrases, path, readable, 1920, 1080)
+            ass = path.read_text(encoding="utf-8-sig")
+        self.assertIn("&HFFFFFFFF", ass)
+        self.assertIn(", -1,", ass.replace(",-1,", ", -1,"))
+        self.assertIn("&HFF000000", ass)
+        self.assertIn(",1,4,0,2,100,100,78,1", ass)
+
 
 if __name__ == "__main__":
     unittest.main()

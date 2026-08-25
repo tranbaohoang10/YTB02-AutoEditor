@@ -12,6 +12,7 @@ from typing import Sequence
 from .config import AppConfig, TransitionConfig
 from .ffmpeg_utils import probe_audio_duration, run_media_command
 from .models import AutoEditorError, SceneAlignment, TimelineEntry, WordTiming
+from .visual_quality import SceneVisualProfile
 
 
 PAPER_PRESETS = ("paper_swipe", "collage_push", "paper_wipe")
@@ -44,6 +45,7 @@ class PauseTransition:
     settle_duration: float
     sfx_path: Path | None
     sfx_start: float | None
+    visual_intent: str = "pause_only"
     source_rms_db: float | None = None
     reason: str = ""
 
@@ -148,19 +150,47 @@ def _adapt_transition_ms(pause_ms: float, config: TransitionConfig) -> int:
 
 def _effect_for_boundary(
     boundary_index: int, pause_ms: float, config: TransitionConfig,
-) -> tuple[str, bool]:
-    """Return a deterministic bridge preset and whether it merits an SFX accent."""
+    left_profile: SceneVisualProfile | None = None,
+    right_profile: SceneVisualProfile | None = None,
+) -> tuple[str, bool, str]:
+    """Choose a sparse transition from pause, energy, and visual density."""
+    left_dense = left_profile is not None and left_profile.density_class == "high"
+    right_dense = right_profile is not None and right_profile.density_class == "high"
+    left_low = left_profile is not None and left_profile.motion_class == "low"
+    right_low = right_profile is not None and right_profile.motion_class == "low"
+    left_freeze = left_profile is not None and left_profile.coverage_shortfall >= 0.25
+
     if pause_ms < config.minimum_pause_ms:
-        return MICRO_PRESETS[boundary_index % len(MICRO_PRESETS)], False
+        if pause_ms >= config.micro_pause_ms and left_freeze:
+            return "micro_crossfade", False, "freeze_tail_exit_soften"
+        return "none", False, "preserve_short_cut"
+
+    if pause_ms < config.preferred_trigger_ms:
+        if left_low or right_low:
+            return "micro_crossfade", False, "low_motion_short_pause_soften"
+        return "micro_crossfade", False, "short_pause_continuity"
+    if left_dense and right_dense:
+        return "micro_crossfade", False, "dense_to_dense_reduce_competition"
+    if left_dense != right_dense:
+        if _should_select(boundary_index, pause_ms, config):
+            return "paper_wipe", True, "density_change_reveal"
+        return "micro_crossfade", False, "density_change_soften"
+    if left_low and right_low and pause_ms >= config.strong_trigger_ms:
+        return "collage_push", True, "low_motion_directional_bridge"
     noticeable = _should_select(boundary_index, pause_ms, config)
     if noticeable:
-        return PAPER_PRESETS[(boundary_index * 5 + 1) % len(PAPER_PRESETS)], True
-    return MICRO_PRESETS[boundary_index % len(MICRO_PRESETS)], False
+        return (
+            PAPER_PRESETS[(boundary_index * 5 + 1) % len(PAPER_PRESETS)],
+            True,
+            "pause_energy_paper_accent",
+        )
+    return "micro_crossfade", False, "continuity_micro_crossfade"
 
 
 def schedule_pause_aware_transitions(
     timeline: Sequence[TimelineEntry], alignments: Sequence[SceneAlignment],
     config: TransitionConfig, *, fps: int = 30,
+    visual_profiles: dict[int, SceneVisualProfile] | None = None,
 ) -> tuple[PauseTransition, ...]:
     """Schedule deterministic bridges wholly inside existing narration pauses.
 
@@ -191,24 +221,27 @@ def schedule_pause_aware_transitions(
         pause = max(0.0, next_start - previous_end)
         pause_ms = pause * 1000.0
         eligible = config.pause_aware and pause_ms >= config.minimum_pause_ms
-        bridge = (
+        left_profile = (visual_profiles or {}).get(left.scene.id)
+        right_profile = (visual_profiles or {}).get(right.scene.id)
+        selected_effect, accented, visual_intent = _effect_for_boundary(
+            boundary_index, pause_ms, config, left_profile, right_profile
+        )
+        bridge = bool(
             config.pause_aware and config.enable_visual
-            and pause_ms >= config.micro_pause_ms
+            and selected_effect != "none"
         )
         if not config.pause_aware:
             reason = "pause_aware_disabled"
-        elif pause_ms < config.micro_pause_ms:
-            reason = "below_threshold"
+        elif selected_effect == "none":
+            reason = visual_intent
         elif not config.enable_visual:
             reason = "visual_disabled"
         elif pause_ms < config.minimum_pause_ms:
             reason = "micro_bridge"
         else:
             reason = "continuity_bridge"
-        effect, accented = (
-            _effect_for_boundary(boundary_index, pause_ms, config)
-            if bridge else ("none", False)
-        )
+        effect = selected_effect if bridge else "none"
+        accented = accented if bridge else False
         duration = 0.0
         bridge_start: float | None = None
         visual_start: float | None = None
@@ -282,6 +315,7 @@ def schedule_pause_aware_transitions(
             settle_duration=settle_duration,
             sfx_path=sfx_path,
             sfx_start=sfx_start,
+            visual_intent=visual_intent,
             reason=reason,
         ))
     return tuple(decisions)
@@ -445,6 +479,7 @@ def write_transition_diagnostics(
             "class": decision.pause_class,
             "eligible": decision.eligible,
             "effect": decision.effect,
+            "visual_intent": decision.visual_intent,
             "bridge_start": (
                 round(decision.bridge_start, 6)
                 if decision.bridge_start is not None else None

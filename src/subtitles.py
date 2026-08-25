@@ -256,7 +256,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{config.font},{config.font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,{config.outline},0,2,60,60,{config.margin_bottom},1
+Style: Default,{config.font},{config.font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H70000000,{-1 if config.bold else 0},0,0,0,100,100,0,0,1,{config.outline},{config.shadow},2,{config.margin_horizontal},{config.margin_horizontal},{config.margin_bottom},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -289,6 +289,10 @@ def write_phrase_ass(
     phrases: Sequence[SubtitlePhrase], path: Path, config: SubtitleConfig,
     width: int, height: int,
 ) -> None:
+    # libass keeps a style shadow visible for unrevealed \ko syllables even when
+    # SecondaryColour is transparent. Phrase karaoke therefore deliberately
+    # uses a fully transparent back colour and zero shadow; the strong outline
+    # appears only when \ko reveals the aligned word.
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {width}
@@ -298,7 +302,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{config.font},{config.font_size},&H00FFFFFF,&HFFFFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,{config.outline},0,2,60,60,{config.margin_bottom},1
+Style: Default,{config.font},{config.font_size},&H00FFFFFF,&HFFFFFFFF,&H00000000,&HFF000000,{-1 if config.bold else 0},0,0,0,100,100,0,0,1,{config.outline},0,2,{config.margin_horizontal},{config.margin_horizontal},{config.margin_bottom},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
