@@ -15,6 +15,10 @@ from .ffmpeg_utils import ffmpeg_filter_path, run_media_command, write_concat_fi
 from .layered_manifest import SceneTransition
 from .models import AutoEditorError
 from .narration import PauseCompressionReport, compress_smart_pauses
+from .visual_quality import (
+    SceneVisualProfile, ensure_flow_gemini_mask, source_cleanup_geometry,
+    source_edge_crop_geometry,
+)
 
 
 _XFADE_TRANSITIONS = {
@@ -187,17 +191,92 @@ def build_source_audio_mix(
 def prepare_video_scene(
     source: Path, destination: Path, duration: float, config: AppConfig,
     *, source_duration: float | None = None,
+    visual_profile: SceneVisualProfile | None = None,
 ) -> None:
     video = config.video
-    base = (
-        f"scale={video.width}:{video.height}:force_original_aspect_ratio=decrease,"
-        f"pad={video.width}:{video.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"fps={video.fps}"
-    )
     command = [
         config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(source),
     ]
+    cleanup_source = bool(
+        visual_profile is not None
+        and visual_profile.asset_kind == "video"
+        and visual_profile.cleanup_required
+        and config.source_cleanup.enabled
+    )
+    base_filters: list[str] = []
+    if cleanup_source and config.source_cleanup.strategy == "safe_edge_crop":
+        crop_width, crop_height = source_edge_crop_geometry(
+            video.width, video.height, config.source_cleanup
+        )
+        base_filters.append(f"crop={crop_width}:{crop_height}:0:0")
+    base_filters.extend([
+        f"scale={video.width}:{video.height}:force_original_aspect_ratio=decrease",
+        f"pad={video.width}:{video.height}:(ow-iw)/2:(oh-ih)/2:color=black",
+        f"fps={video.fps}",
+        "setsar=1",
+    ])
+    base = ",".join(base_filters)
+    graph_parts: list[str] = []
+    prepared_label = "preparedbase"
+    if cleanup_source and config.source_cleanup.strategy == "median_texture_patch":
+        mask = ensure_flow_gemini_mask(
+            destination.parent, video.width, video.height, config.source_cleanup
+        )
+        x, y, patch_width, patch_height = source_cleanup_geometry(
+            video.width, video.height, config.source_cleanup
+        )
+        radius = min(
+            config.source_cleanup.median_radius,
+            max(1, min(patch_width, patch_height) // 2 - 1),
+        )
+        command.extend(["-loop", "1", "-framerate", str(video.fps), "-i", str(mask)])
+        graph_parts.extend([
+            f"[0:v]{base},split=2[cleanbase][patchsource]",
+            f"[patchsource]crop={patch_width}:{patch_height}:{x}:{y},"
+            f"median=radius={radius}[texturepatch]",
+            "[texturepatch][1:v]alphamerge[texturealpha]",
+            f"[cleanbase][texturealpha]overlay={x}:{y}:shortest=1[cleaned]",
+        ])
+        source_label = "cleaned"
+    else:
+        graph_parts.append(f"[0:v]{base}[normalized]")
+        source_label = "normalized"
+
+    quality_filters: list[str] = []
+    if visual_profile is not None and config.visual_quality.enabled:
+        quality = config.visual_quality
+        if visual_profile.density_class == "high":
+            quality_filters.extend([
+                f"eq=contrast={quality.hierarchy_contrast:.4f}:"
+                f"saturation={quality.hierarchy_saturation:.4f}:"
+                f"brightness={quality.hierarchy_brightness:.4f}",
+                f"vignette=angle={quality.hierarchy_vignette_angle:.6f}",
+            ])
+        if visual_profile.motion_class == "low" and quality.micro_motion_zoom > 0:
+            frames = max(1, round(duration * video.fps))
+            direction = sum(source.name.encode("utf-8")) % 4
+            x_expression = (
+                "0" if direction == 0 else
+                "iw-iw/zoom" if direction == 1 else
+                "(iw-iw/zoom)/2"
+            )
+            y_expression = (
+                "0" if direction == 2 else
+                "ih-ih/zoom" if direction == 3 else
+                "(ih-ih/zoom)/2"
+            )
+            quality_filters.append(
+                f"zoompan=z='1+{quality.micro_motion_zoom:.6f}*"
+                f"(0.5-0.5*cos(PI*(on+1)/{frames}))':"
+                f"x='{x_expression}':y='{y_expression}':d=1:"
+                f"s={video.width}x{video.height}:fps={video.fps}"
+            )
+    quality_chain = ",".join(quality_filters)
+    graph_parts.append(
+        f"[{source_label}]{quality_chain}[{prepared_label}]"
+        if quality_chain else f"[{source_label}]null[{prepared_label}]"
+    )
     freeze_tail = (
         max(0.0, duration - source_duration)
         if source_duration is not None else 0.0
@@ -219,28 +298,38 @@ def prepare_video_scene(
             "ih-ih/zoom" if direction == 3 else
             "(ih-ih/zoom)/2"
         )
-        graph = (
-            f"[0:v]{base},split=2[activebase][tailbase];"
+        graph_parts.append(
+            f"[{prepared_label}]split=2[activebase][tailbase]"
+        )
+        graph_parts.append(
             f"[activebase]trim=duration={active_duration:.6f},"
-            "setpts=PTS-STARTPTS[active];"
+            "setpts=PTS-STARTPTS[active]"
+        )
+        graph_parts.append(
             f"[tailbase]trim=start={last_frame_start:.6f}:duration={1 / video.fps:.6f},"
             "setpts=PTS-STARTPTS,"
             f"tpad=stop_mode=clone:stop_duration={freeze_tail:.6f},"
             f"trim=duration={freeze_tail:.6f},"
-            f"zoompan=z='1+{zoom_amount:.6f}*(on+1)/{tail_frames}':"
+            f"zoompan=z='1+{zoom_amount:.6f}*"
+            f"(0.5-0.5*cos(PI*(on+1)/{tail_frames}))':"
             f"x='{x_expression}':y='{y_expression}':d=1:"
             f"s={video.width}x{video.height}:fps={video.fps},"
-            "setpts=PTS-STARTPTS[tail];"
+            "setpts=PTS-STARTPTS[tail]"
+        )
+        graph_parts.append(
             f"[active][tail]concat=n=2:v=1:a=0,trim=duration={duration:.6f},"
             "setpts=PTS-STARTPTS[vout]"
         )
+        graph = ";".join(graph_parts)
         command.extend(["-filter_complex", graph, "-map", "[vout]", "-an"])
     else:
-        vf = (
-            f"{base},tpad=stop_mode=clone:stop_duration={duration:.6f},"
-            f"trim=duration={duration:.6f},setpts=PTS-STARTPTS"
+        graph_parts.append(
+            f"[{prepared_label}]tpad=stop_mode=clone:stop_duration={duration:.6f},"
+            f"trim=duration={duration:.6f},setpts=PTS-STARTPTS[vout]"
         )
-        command.extend(["-map", "0:v:0", "-an", "-vf", vf])
+        command.extend([
+            "-filter_complex", ";".join(graph_parts), "-map", "[vout]", "-an",
+        ])
     command.extend([
         "-c:v", video.codec, "-crf", str(video.crf), "-preset", video.preset,
         "-pix_fmt", "yuv420p", "-color_range", "tv", "-colorspace", "bt709",
@@ -391,6 +480,8 @@ def render_final_video(
             f"fontsize={config.watermark.font_size}:"
             f"x=w-text_w-{config.watermark.margin_right}:"
             f"y=h-text_h-{config.watermark.margin_bottom}:"
+            f"borderw={config.watermark.border_width}:"
+            f"bordercolor=black@{config.watermark.border_opacity:.3f}:"
             "shadowcolor=black@0.650:"
             f"shadowx={config.watermark.shadow_x}:shadowy={config.watermark.shadow_y}"
         )

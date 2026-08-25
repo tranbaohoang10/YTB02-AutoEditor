@@ -52,14 +52,21 @@ class ConfigTests(unittest.TestCase):
         self.assertTrue(config.watermark.enabled)
         self.assertEqual(config.watermark.text, "l0ki")
         self.assertEqual(config.watermark.position, "bottom_right")
-        self.assertEqual(config.watermark.opacity, 0.72)
+        self.assertEqual(config.watermark.opacity, 0.86)
         self.assertEqual((config.watermark.margin_right, config.watermark.margin_bottom),
-                         (50, 45))
+                         (58, 50))
+        self.assertEqual(config.watermark.border_width, 1)
+        self.assertTrue(config.source_cleanup.enabled)
+        self.assertEqual(config.source_cleanup.strategy, "safe_edge_crop")
+        self.assertTrue(config.visual_quality.enabled)
+        self.assertEqual(config.subtitles.font_size, 56)
+        self.assertTrue(config.subtitles.bold)
+        self.assertEqual(config.subtitles.shadow, 0)
         self.assertTrue(config.transitions.pause_aware)
         self.assertEqual(config.transitions.minimum_pause_ms, 250)
         self.assertEqual(config.transitions.preferred_trigger_ms, 300)
         self.assertEqual(config.transitions.max_transition_ms, 350)
-        self.assertEqual(config.transitions.sfx_gain_db, -19.0)
+        self.assertEqual(config.transitions.sfx_gain_db, -21.5)
 
 
 if __name__ == "__main__":

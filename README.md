@@ -4,7 +4,7 @@ YTB02 AutoEditor là pipeline dựng video local-first cho Windows. Project nh�
 
 Pipeline:
 
-`script` → Kokoro TTS → punctuation-aware pause compression → đo WAV thật → WhisperX forced alignment → visual retiming → pause-aware paper transition → stable phrase subtitle → Flow/transition SFX mix → watermark → `output/FINAL_VIDEO_EN|VI_<số>.mp4`
+`script` → Kokoro TTS → punctuation-aware pause compression → đo WAV thật → WhisperX forced alignment → source-logo cleanup/visual profiling → visual retiming → density-aware paper transition → stable phrase subtitle → Flow/transition SFX mix → final-only `l0ki` watermark → `output/FINAL_VIDEO_EN|VI_<số>.mp4`
 
 ## Invariant không thay đổi từ V1
 
@@ -17,7 +17,7 @@ Pipeline:
 - Loudness narration mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source-video audio được mix làm SFX nền ở gain mặc định `-18 dB`.
 - Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC stereo 48 kHz.
 - EN và VI có dãy độc lập: `FINAL_VIDEO_EN_<số>.mp4` và `FINAL_VIDEO_VI_<số>.mp4`. Mỗi dãy dùng số nguyên hợp lệ lớn nhất + 1, không lấp gap/ghi đè; tên được giữ atomic trước khi FFmpeg render.
-- Watermark `l0ki` được burn ở final render, bottom-right, sau subtitle/transition; source Flow clip không bị sửa.
+- Logo sparkle Gemini/Flow đã biết được xóa deterministic ở tầng prepared scene bằng `safe_edge_crop` 16:9 đã audit trên 30 focal point. Median paper-texture patch vẫn là fallback cấu hình khi crop không an toàn; `l0ki` chỉ được burn một lần ở final render, bottom-right, sau subtitle/transition.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
 ## Workflow ưu tiên — motion graphics layered collage
@@ -203,7 +203,7 @@ Script V1 tiếp tục hoạt động:
 }
 ```
 
-Copy clip vào `input\videos`. Clip dài hơn narration bị trim. Với clip ngắn hơn, freeze tail trên ngưỡng cấu hình được che bằng tiny zoom/pan deterministic; nội dung ảnh không bị sinh thêm hoặc biến đổi generative. Video được scale giữ tỷ lệ và pad về canvas. Nếu clip có audio stream, pipeline lấy phần audio trong thời lượng thật của clip, fade in/out nhẹ và mix làm ambient/transition/paper/whoosh SFX; audio không loop khi phần hình kéo dài. Clip không có audio vẫn build bình thường.
+Copy clip vào `input\videos`. Clip dài hơn narration bị trim. Với clip ngắn hơn, freeze tail trên ngưỡng cấu hình được che bằng tiny zoom/pan ease-in/out deterministic; clip có motion thấp còn nhận micro drift rất nhẹ. Nội dung ảnh không bị sinh thêm hoặc biến đổi generative. Video được scale giữ tỷ lệ và pad về canvas. Source Flow hiện tại được crop cạnh phải/dưới trước mọi freeze/motion/transition; contact-sheet audit xác nhận main focal point còn nguyên và các secondary edge label gây busy được giảm. Không dùng `l0ki` để che logo nguồn. Nếu clip có audio stream, pipeline lấy phần audio trong thời lượng thật của clip, fade in/out nhẹ và mix làm ambient/transition/paper/whoosh SFX; audio không loop khi phần hình kéo dài. Clip không có audio vẫn build bình thường.
 
 Các mặc định audio quan trọng trong `config.json`:
 
@@ -306,9 +306,9 @@ Rerun chỉ dọn intermediate build folders trong `work`; không xóa input cli
 
 ## Pause-aware transition, SFX và watermark
 
-Scheduler chỉ xét transition ở scene boundary sau khi final WAV đã được WhisperX align. Pause dưới `micro_pause_ms` giữ cut ngắn; pause 180–250 ms nhận micro bridge; pause từ 250 ms nhận continuity bridge. Cadence deterministic chỉ dùng paper/collage rõ ở một phần boundary, còn lại dùng micro push/crossfade để tránh spam. Mỗi bridge có pre-roll, main transition và settle được lượng tử hóa theo 30 fps, nằm hoàn toàn trong pause hiện có và không thêm silence hoặc dịch word/narration. Internal phrase pause không kích hoạt transition.
+Scheduler chỉ xét transition ở scene boundary sau khi final WAV đã được WhisperX align. Pause dưới `minimum_pause_ms` ưu tiên clean cut; pause đủ dài mới được xét bridge. Quyết định tiếp theo dùng motion energy và visual density: dense→dense ưu tiên hard cut/micro crossfade, density change dùng paper wipe có dụng ý, low-motion pair có thể dùng collage push, và paper accent chỉ xuất hiện theo cadence thưa. Mỗi bridge có pre-roll, main transition và settle được lượng tử hóa theo 30 fps, nằm hoàn toàn trong pause hiện có và không thêm silence hoặc dịch word/narration. Internal phrase pause không kích hoạt transition.
 
-Preset paper-documentary gồm `paper_swipe`, `paper_wipe`, `collage_push`, `micro_crossfade` và `micro_push`. Local asset trong `assets/sfx` được trim, fade, delay đúng visual start và không loop. Nếu thiếu asset, visual vẫn render. Source Flow SFX được giữ riêng; transition SFX có conflict check và gain riêng. `work/diagnostics/transitions.json` liệt kê pre-roll/transition/settle và xác nhận narration timeline không đổi; `visual_freeze.json` phân cấp/mô tả masking freeze-tail.
+Preset paper-documentary gồm `paper_swipe`, `paper_wipe`, `collage_push` và `micro_crossfade`. Local asset trong `assets/sfx` được trim, fade, delay đúng visual start và không loop. Nếu thiếu asset, visual vẫn render. Source Flow SFX được giữ riêng; transition SFX có conflict check và gain thấp hơn narration. `work/diagnostics/transitions.json` ghi thêm `visual_intent`, pre-roll/transition/settle và xác nhận narration timeline không đổi; `visual_profiles.json` ghi density/motion/logo score; `visual_freeze.json` phân cấp/mô tả masking freeze-tail.
 
 Đo continuity trên final video bằng:
 
@@ -318,7 +318,15 @@ Preset paper-documentary gồm `paper_swipe`, `paper_wipe`, `collage_push`, `mic
 
 Verifier decode vùng hình phía trên subtitle/watermark, dùng mean absolute frame delta với ngưỡng chống codec noise, rồi báo `static_before_ms`, `transition_motion_ms`, `settle_ms` và `static_dead_zone_ms` cho từng boundary.
 
-Các section `transitions` và `watermark` trong `config.json` giữ threshold/duration/gain cùng text, opacity và safe margins. Watermark hiện dùng font file Windows rõ ràng để không phụ thuộc Fontconfig.
+Các section `source_cleanup`, `visual_quality`, `transitions`, `subtitles` và `watermark` trong `config.json` giữ safe-crop ratio, mask/median fallback, profile threshold, timing/gain và final style. Subtitle dùng nét viền đậm nhưng tắt ASS shadow để `\ko` không làm lộ bóng của từ tương lai trước timestamp alignment. `l0ki` dùng font file Windows, border/shadow nhẹ và safe margin rõ ràng để ổn định trên nền sáng/tối.
+
+QA watermark trước/sau toàn bộ source/prepared scene:
+
+```bat
+.venv\Scripts\python.exe tools\analyze_watermark_cleanup.py --source-dir input\videos --prepared-dir work\scenes --output-dir work\diagnostics\watermark --json work\diagnostics\watermark_cleanup.json
+```
+
+Tool tạo contact sheet ở 0.5/2.0/3.5 giây cho từng scene, xác nhận đủ prepared output, cleanup chạy pre-final và mark final cấu hình duy nhất là `l0ki`. Contact sheet vẫn là visual gate bắt buộc vì texture/logo là tín hiệu hình ảnh, không được kết luận chỉ bằng một scalar score.
 
 ## Nhịp narration, forced alignment và subtitle
 

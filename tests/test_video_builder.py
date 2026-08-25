@@ -13,6 +13,7 @@ from src.video_builder import (
     concat_video_scenes_with_transitions, prepare_video_scene, render_final_video,
     trim_narration_padding,
 )
+from src.visual_quality import SceneVisualProfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,10 +28,10 @@ class VideoBuilderTests(unittest.TestCase):
             root = Path(directory)
             prepare_video_scene(root / "source.mp4", root / "prepared.mp4", 4.6, config)
         command = run.call_args.args[0]
-        vf = command[command.index("-vf") + 1]
-        self.assertIn("tpad=stop_mode=clone:stop_duration=4.600000", vf)
-        self.assertIn("trim=duration=4.600000", vf)
-        self.assertIn("force_original_aspect_ratio=decrease", vf)
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("tpad=stop_mode=clone:stop_duration=4.600000", graph)
+        self.assertIn("trim=duration=4.600000", graph)
+        self.assertIn("force_original_aspect_ratio=decrease", graph)
         self.assertIn("-an", command)
 
     def test_concat_audio_uses_loudnorm_when_enabled(self) -> None:
@@ -217,8 +218,30 @@ class VideoBuilderTests(unittest.TestCase):
                 source_duration=4.0,
             )
         command = run.call_args.args[0]
-        self.assertNotIn("-filter_complex", command)
-        self.assertIn("tpad=stop_mode=clone", command[command.index("-vf") + 1])
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertIn("tpad=stop_mode=clone", graph)
+        self.assertNotIn("zoompan=", graph)
+
+    def test_video_profile_applies_safe_edge_crop_before_quality_filters(self) -> None:
+        config = load_config(ROOT / "config.json")
+        profile = SceneVisualProfile(
+            3, "video", 0.08, 0.01, 0.08, "high", "low", True,
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            prepare_video_scene(
+                root / "scene_03.mp4", root / "out.mp4", 3.0, config,
+                source_duration=4.0, visual_profile=profile,
+            )
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertEqual(command.count("-i"), 1)
+        self.assertIn("crop=1700:956:0:0", graph)
+        self.assertLess(graph.index("crop=1700:956:0:0"), graph.index("eq=contrast="))
+        self.assertIn("vignette=angle=", graph)
+        self.assertIn("zoompan=", graph)
 
     def test_final_encode_signals_limited_bt709_contract(self) -> None:
         config = load_config(ROOT / "config.json")
@@ -244,7 +267,8 @@ class VideoBuilderTests(unittest.TestCase):
         self.assertIn("ass=filename=", video_filter)
         self.assertIn("drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='l0ki'",
                       video_filter)
-        self.assertIn("x=w-text_w-50:y=h-text_h-45", video_filter)
+        self.assertIn("x=w-text_w-58:y=h-text_h-50", video_filter)
+        self.assertIn("borderw=1:bordercolor=black@0.720", video_filter)
         self.assertLess(video_filter.index("ass="), video_filter.index("drawtext="))
 
     def test_final_mix_keeps_narration_primary_and_adds_source_sfx(self) -> None:

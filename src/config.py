@@ -75,6 +75,9 @@ class SubtitleConfig:
     min_hold_ms: int = 250
     max_hold_ms: int = 450
     cps_warning: float = 22.0
+    bold: bool = False
+    shadow: int = 0
+    margin_horizontal: int = 60
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,37 @@ class WatermarkConfig:
     margin_bottom: int
     shadow_x: int
     shadow_y: int
+    border_width: int
+    border_opacity: float
+
+
+@dataclass(frozen=True)
+class SourceCleanupConfig:
+    enabled: bool
+    strategy: str
+    target: str
+    x_ratio: float
+    y_ratio: float
+    width_ratio: float
+    height_ratio: float
+    median_radius: int
+    feather_px: int
+    crop_width_ratio: float
+    crop_height_ratio: float
+
+
+@dataclass(frozen=True)
+class VisualQualityConfig:
+    enabled: bool
+    analysis_width: int
+    sample_frames: int
+    low_motion_threshold: float
+    high_density_threshold: float
+    micro_motion_zoom: float
+    hierarchy_contrast: float
+    hierarchy_saturation: float
+    hierarchy_brightness: float
+    hierarchy_vignette_angle: float
 
 
 @dataclass(frozen=True)
@@ -136,6 +170,8 @@ class AppConfig:
     audio: AudioConfig
     subtitles: SubtitleConfig
     alignment: AlignmentConfig
+    source_cleanup: SourceCleanupConfig
+    visual_quality: VisualQualityConfig
     watermark: WatermarkConfig
     transitions: TransitionConfig
 
@@ -161,6 +197,12 @@ def load_config(path: Path) -> AppConfig:
         alignment = _section(data, "alignment")
         watermark = _section(data, "watermark")
         transitions = _section(data, "transitions")
+        source_cleanup = data.get("source_cleanup", {})
+        visual_quality = data.get("visual_quality", {})
+        if not isinstance(source_cleanup, dict):
+            raise TypeError("source_cleanup phải là object")
+        if not isinstance(visual_quality, dict):
+            raise TypeError("visual_quality phải là object")
         fallback_value = alignment["allow_approximate_fallback"]
         if not isinstance(fallback_value, bool):
             raise TypeError("alignment.allow_approximate_fallback phải là boolean")
@@ -173,12 +215,19 @@ def load_config(path: Path) -> AppConfig:
         smart_pause_compression = audio.get("smart_pause_compression", True)
         if not isinstance(smart_pause_compression, bool):
             raise TypeError("audio.smart_pause_compression phải là boolean")
+        subtitle_bold = subtitles.get("bold", False)
+        if not isinstance(subtitle_bold, bool):
+            raise TypeError("subtitles.bold phải là boolean")
         watermark_enabled = watermark.get("enabled", True)
+        source_cleanup_enabled = source_cleanup.get("enabled", False)
+        visual_quality_enabled = visual_quality.get("enabled", True)
         transition_pause_aware = transitions.get("pause_aware", True)
         transition_visual = transitions.get("enable_visual", True)
         transition_sfx = transitions.get("enable_sfx", True)
         for label, value in (
             ("watermark.enabled", watermark_enabled),
+            ("source_cleanup.enabled", source_cleanup_enabled),
+            ("visual_quality.enabled", visual_quality_enabled),
             ("transitions.pause_aware", transition_pause_aware),
             ("transitions.enable_visual", transition_visual),
             ("transitions.enable_sfx", transition_sfx),
@@ -264,6 +313,9 @@ def load_config(path: Path) -> AppConfig:
                 min_hold_ms=int(subtitles.get("min_hold_ms", 250)),
                 max_hold_ms=int(subtitles.get("max_hold_ms", 450)),
                 cps_warning=float(subtitles.get("cps_warning", 22.0)),
+                bold=subtitle_bold,
+                shadow=int(subtitles.get("shadow", 0)),
+                margin_horizontal=int(subtitles.get("margin_horizontal", 60)),
             ),
             alignment=AlignmentConfig(
                 engine=str(alignment["engine"]),
@@ -275,6 +327,47 @@ def load_config(path: Path) -> AppConfig:
                 if not Path(str(alignment["cache_dir"])).is_absolute()
                 else Path(str(alignment["cache_dir"])),
                 duration_tolerance=float(alignment.get("duration_tolerance", 0.25)),
+            ),
+            source_cleanup=SourceCleanupConfig(
+                enabled=source_cleanup_enabled,
+                strategy=str(source_cleanup.get("strategy", "median_texture_patch")),
+                target=str(source_cleanup.get("target", "gemini_flow_sparkle")),
+                x_ratio=float(source_cleanup.get("x_ratio", 0.875)),
+                y_ratio=float(source_cleanup.get("y_ratio", 0.764)),
+                width_ratio=float(source_cleanup.get("width_ratio", 0.104167)),
+                height_ratio=float(source_cleanup.get("height_ratio", 0.185185)),
+                median_radius=int(source_cleanup.get("median_radius", 60)),
+                feather_px=int(source_cleanup.get("feather_px", 3)),
+                crop_width_ratio=float(
+                    source_cleanup.get("crop_width_ratio", 0.885416667)
+                ),
+                crop_height_ratio=float(
+                    source_cleanup.get("crop_height_ratio", 0.885185185)
+                ),
+            ),
+            visual_quality=VisualQualityConfig(
+                enabled=visual_quality_enabled,
+                analysis_width=int(visual_quality.get("analysis_width", 320)),
+                sample_frames=int(visual_quality.get("sample_frames", 6)),
+                low_motion_threshold=float(
+                    visual_quality.get("low_motion_threshold", 0.09)
+                ),
+                high_density_threshold=float(
+                    visual_quality.get("high_density_threshold", 0.064)
+                ),
+                micro_motion_zoom=float(visual_quality.get("micro_motion_zoom", 0.010)),
+                hierarchy_contrast=float(
+                    visual_quality.get("hierarchy_contrast", 0.97)
+                ),
+                hierarchy_saturation=float(
+                    visual_quality.get("hierarchy_saturation", 0.92)
+                ),
+                hierarchy_brightness=float(
+                    visual_quality.get("hierarchy_brightness", 0.008)
+                ),
+                hierarchy_vignette_angle=float(
+                    visual_quality.get("hierarchy_vignette_angle", 0.448799)
+                ),
             ),
             watermark=WatermarkConfig(
                 enabled=watermark_enabled,
@@ -291,6 +384,8 @@ def load_config(path: Path) -> AppConfig:
                 margin_bottom=int(watermark.get("margin_bottom", 45)),
                 shadow_x=int(watermark.get("shadow_x", 2)),
                 shadow_y=int(watermark.get("shadow_y", 2)),
+                border_width=int(watermark.get("border_width", 1)),
+                border_opacity=float(watermark.get("border_opacity", 0.72)),
             ),
             transitions=TransitionConfig(
                 pause_aware=transition_pause_aware,
@@ -415,6 +510,48 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("Subtitle hold phải tăng dần trong 0..2000 ms.")
     if result.subtitles.cps_warning <= 0:
         raise AutoEditorError("Subtitle cps_warning phải > 0.")
+    if not 0 <= result.subtitles.shadow <= 10:
+        raise AutoEditorError("Subtitle shadow phải trong khoảng 0..10.")
+    if not 0 <= result.subtitles.margin_horizontal <= result.video.width // 3:
+        raise AutoEditorError("Subtitle margin_horizontal không hợp lệ.")
+    cleanup = result.source_cleanup
+    if cleanup.strategy not in {"safe_edge_crop", "median_texture_patch"}:
+        raise AutoEditorError(
+            "source_cleanup.strategy chỉ hỗ trợ safe_edge_crop/median_texture_patch."
+        )
+    if cleanup.target != "gemini_flow_sparkle":
+        raise AutoEditorError("source_cleanup.target hiện chỉ hỗ trợ gemini_flow_sparkle.")
+    if not all(0.0 <= value <= 1.0 for value in (
+        cleanup.x_ratio, cleanup.y_ratio, cleanup.width_ratio, cleanup.height_ratio,
+    )):
+        raise AutoEditorError("Source-cleanup ratios phải nằm trong 0..1.")
+    if cleanup.x_ratio + cleanup.width_ratio > 1.0 + 1e-6 or (
+        cleanup.y_ratio + cleanup.height_ratio > 1.0 + 1e-6
+    ):
+        raise AutoEditorError("Source-cleanup patch phải nằm trong khung hình.")
+    if not 1 <= cleanup.median_radius <= 127 or not 0 <= cleanup.feather_px <= 20:
+        raise AutoEditorError("Source-cleanup median/feather không hợp lệ.")
+    if not 0.5 <= cleanup.crop_width_ratio <= 1.0 or not (
+        0.5 <= cleanup.crop_height_ratio <= 1.0
+    ):
+        raise AutoEditorError("Source-cleanup crop ratios phải trong 0.5..1.0.")
+    quality = result.visual_quality
+    if not 80 <= quality.analysis_width <= 960 or not 2 <= quality.sample_frames <= 30:
+        raise AutoEditorError("Visual-quality analysis_width/sample_frames không hợp lệ.")
+    if not 0.0 <= quality.low_motion_threshold <= 1.0:
+        raise AutoEditorError("low_motion_threshold phải trong 0..1.")
+    if not 0.0 <= quality.high_density_threshold <= 1.0:
+        raise AutoEditorError("high_density_threshold phải trong 0..1.")
+    if not 0.0 <= quality.micro_motion_zoom <= 0.05:
+        raise AutoEditorError("micro_motion_zoom phải trong 0..0.05.")
+    if not 0.8 <= quality.hierarchy_contrast <= 1.2:
+        raise AutoEditorError("hierarchy_contrast phải trong 0.8..1.2.")
+    if not 0.0 <= quality.hierarchy_saturation <= 2.0:
+        raise AutoEditorError("hierarchy_saturation phải trong 0..2.")
+    if not -0.1 <= quality.hierarchy_brightness <= 0.1:
+        raise AutoEditorError("hierarchy_brightness phải trong -0.1..0.1.")
+    if not 0.1 <= quality.hierarchy_vignette_angle <= 1.2:
+        raise AutoEditorError("hierarchy_vignette_angle phải trong 0.1..1.2.")
     if result.watermark.text != "l0ki":
         raise AutoEditorError("watermark.text phải đúng chính xác là 'l0ki'.")
     if result.watermark.position != "bottom_right":
@@ -425,6 +562,10 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("watermark.opacity phải trong khoảng (0, 1].")
     if min(result.watermark.margin_right, result.watermark.margin_bottom) < 0:
         raise AutoEditorError("Watermark margins không được âm.")
+    if not 0 <= result.watermark.border_width <= 10:
+        raise AutoEditorError("watermark.border_width phải trong khoảng 0..10.")
+    if not 0.0 <= result.watermark.border_opacity <= 1.0:
+        raise AutoEditorError("watermark.border_opacity phải trong khoảng 0..1.")
     if result.transitions.style != "paper_documentary":
         raise AutoEditorError("transitions.style hiện chỉ hỗ trợ 'paper_documentary'.")
     pause_thresholds = (

@@ -23,6 +23,9 @@ from src.video_builder import (
     concat_video_scenes_with_transitions, render_final_video,
     prepare_video_scene, trim_narration_padding,
 )
+from src.visual_quality import (
+    SceneVisualProfile, ensure_flow_gemini_mask, source_cleanup_geometry,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +69,53 @@ def _probe_streams(path: Path, ffprobe: str) -> dict:
 
 @unittest.skipUnless(os.environ.get("YTB_RUN_REAL_MEDIA") == "1", "real FFmpeg smoke is opt-in")
 class RealMediaSmokeTests(unittest.TestCase):
+    def test_real_flow_sparkle_cleanup_removes_logo_before_final(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe")
+        self.assertIsNotNone(ffmpeg)
+        self.assertIsNotNone(ffprobe)
+        config = load_config(ROOT / "config.json")
+        config = replace(
+            config, ffmpeg=ffmpeg, ffprobe=ffprobe,
+            video=replace(config.video, width=320, height=180, preset="ultrafast"),
+        )
+        profile = SceneVisualProfile(
+            1, "video", 0.02, 0.0, 0.1, "normal", "low", True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            still = Image.new("RGB", (320, 180), (198, 187, 165))
+            mask_path = ensure_flow_gemini_mask(
+                root, 320, 180, config.source_cleanup
+            )
+            x, y, width, height = source_cleanup_geometry(
+                320, 180, config.source_cleanup
+            )
+            with Image.open(mask_path).convert("L") as mask:
+                still.paste(Image.new("RGB", (width, height), "white"), (x, y), mask)
+            source_png = root / "flow_source.png"
+            still.save(source_png)
+            source = root / "flow_source.mp4"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-loop", "1",
+                "-i", str(source_png), "-t", "1", "-r", "30", "-an", "-c:v",
+                "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(source),
+            ], check=True)
+            cleaned = root / "cleaned.mp4"
+            prepare_video_scene(
+                source, cleaned, 1.0, config, source_duration=1.0,
+                visual_profile=profile,
+            )
+            frame = root / "cleaned.png"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", "0.5",
+                "-i", str(cleaned), "-frames:v", "1", "-update", "1", str(frame),
+            ], check=True)
+            with Image.open(frame).convert("RGB") as image:
+                patch = image.crop((x, y, x + width, y + height))
+                bright_after = sum(min(pixel) > 235 for pixel in patch.getdata())
+        self.assertLess(bright_after, width * height * 0.03)
+
     def test_two_scene_zero_gap_trims_only_edge_padding(self) -> None:
         ffmpeg = shutil.which("ffmpeg")
         ffprobe = shutil.which("ffprobe")
