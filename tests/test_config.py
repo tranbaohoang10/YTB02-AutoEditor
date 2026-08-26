@@ -57,7 +57,7 @@ class ConfigTests(unittest.TestCase):
                          (58, 50))
         self.assertEqual(config.watermark.border_width, 1)
         self.assertTrue(config.source_cleanup.enabled)
-        self.assertEqual(config.source_cleanup.strategy, "safe_edge_crop")
+        self.assertEqual(config.source_cleanup.strategy, "paper_corner_patch")
         self.assertTrue(config.visual_quality.enabled)
         self.assertEqual(config.subtitles.font_size, 56)
         self.assertTrue(config.subtitles.bold)

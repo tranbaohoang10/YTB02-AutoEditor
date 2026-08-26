@@ -87,7 +87,7 @@
   },
   "source_cleanup": {
     "enabled": true,
-    "strategy": "safe_edge_crop",
+    "strategy": "paper_corner_patch",
     "target": "gemini_flow_sparkle",
     "x_ratio": 0.875,
     "y_ratio": 0.764,
@@ -95,6 +95,7 @@
     "height_ratio": 0.185185,
     "median_radius": 60,
     "feather_px": 3,
+    "paper_margin_px": 14,
     "crop_width_ratio": 0.885416667,
     "crop_height_ratio": 0.885185185
   },
@@ -108,7 +109,8 @@
     "hierarchy_contrast": 0.97,
     "hierarchy_saturation": 0.92,
     "hierarchy_brightness": 0.008,
-    "hierarchy_vignette_angle": 0.448799
+    "hierarchy_vignette_angle": 0.448799,
+    "subtitle_density_threshold": 0.070
   },
   "watermark": {
     "enabled": true,

@@ -287,7 +287,7 @@ def _phrase_ass_text(phrase: SubtitlePhrase) -> str:
 
 def write_phrase_ass(
     phrases: Sequence[SubtitlePhrase], path: Path, config: SubtitleConfig,
-    width: int, height: int,
+    width: int, height: int, *, dense_scene_ids: set[int] | None = None,
 ) -> None:
     # libass keeps a style shadow visible for unrevealed \ko syllables even when
     # SecondaryColour is transparent. Phrase karaoke therefore deliberately
@@ -308,16 +308,21 @@ Style: Default,{config.font},{config.font_size},&H00FFFFFF,&HFFFFFFFF,&H00000000
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events: list[str] = []
+    dense = dense_scene_ids or set()
     for phrase in phrases:
         starts = [math.ceil(word.start * 100 - 1e-9) for word in phrase.words]
         if math.ceil(phrase.start * 100 - 1e-9) != starts[0]:
             raise AutoEditorError("ASS phrase không bắt đầu đúng serialized word start.")
         if any(left > right for left, right in zip(starts, starts[1:])):
             raise AutoEditorError("ASS word reveal không theo thứ tự alignment.")
+        readability_override = (
+            r"{\bord" + str(config.outline + 2) + "}"
+            if phrase.scene_id in dense else ""
+        )
         events.append(
             f"Dialogue: 0,{format_ass_timestamp(phrase.start)},"
             f"{format_ass_timestamp(phrase.end)},Default,,0,0,0,,"
-            f"{_phrase_ass_text(phrase)}"
+            f"{readability_override}{_phrase_ass_text(phrase)}"
         )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(header + "\n".join(events) + "\n", encoding="utf-8-sig")

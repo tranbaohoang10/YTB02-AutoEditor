@@ -4,7 +4,7 @@ YTB02 AutoEditor là pipeline dựng video local-first cho Windows. Project nh�
 
 Pipeline:
 
-`script` → Kokoro TTS → punctuation-aware pause compression → đo WAV thật → WhisperX forced alignment → source-logo cleanup/visual profiling → visual retiming → density-aware paper transition → stable phrase subtitle → Flow/transition SFX mix → final-only `l0ki` watermark → `output/FINAL_VIDEO_EN|VI_<số>.mp4`
+`script` → Kokoro TTS → punctuation-aware pause compression → đo WAV thật → WhisperX forced alignment → source-logo cleanup/visual profiling → visual retiming → density-aware paper transition → stable phrase subtitle → Flow/transition SFX mix → final-only `l0ki` watermark → `output/<topic>/Part_<NN>/<EN|VI>/<topic>_Part_<NN>_<lang>_<số>.mp4`
 
 ## Invariant không thay đổi từ V1
 
@@ -16,8 +16,8 @@ Pipeline:
 - English mặc định `am_eric`, Vietnamese mặc định `hung_thinh`, speed mặc định `1.0`; trường `speed` trong script vẫn là override rõ ràng.
 - Loudness narration mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source-video audio được mix làm SFX nền ở gain mặc định `-18 dB`.
 - Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC stereo 48 kHz.
-- EN và VI có dãy độc lập: `FINAL_VIDEO_EN_<số>.mp4` và `FINAL_VIDEO_VI_<số>.mp4`. Mỗi dãy dùng số nguyên hợp lệ lớn nhất + 1, không lấp gap/ghi đè; tên được giữ atomic trước khi FFmpeg render.
-- Logo sparkle Gemini/Flow đã biết được xóa deterministic ở tầng prepared scene bằng `safe_edge_crop` 16:9 đã audit trên 30 focal point. Median paper-texture patch vẫn là fallback cấu hình khi crop không an toàn; `l0ki` chỉ được burn một lần ở final render, bottom-right, sau subtitle/transition.
+- EN và VI có dãy độc lập trong từng scope `topic + part + language`. Mỗi dãy dùng số nguyên hợp lệ lớn nhất + 1, không lấp gap/ghi đè; render dùng file `.building.mp4`, được ffprobe validate rồi mới publish atomic.
+- Logo sparkle Gemini/Flow đã biết được che deterministic ở tầng prepared scene bằng paper-corner patch cục bộ 200×200 (matte 228×228 có torn edge), không crop/zoom toàn frame. `safe_edge_crop` chỉ còn là lựa chọn explicit; `l0ki` chỉ được burn một lần ở final render, bottom-right, sau subtitle/transition.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
 ## Workflow ưu tiên — motion graphics layered collage
@@ -47,6 +47,8 @@ Script một scene:
 
 ```json
 {
+  "topic": "Layered demo",
+  "part": 1,
   "title": "Layered demo",
   "language": "en",
   "visual": {"mode": "layered_collage"},
@@ -118,6 +120,8 @@ Copy ảnh `.png`, `.jpg`, `.jpeg` hoặc `.webp` vào `input\images`, đặt `v
 
 ```json
 {
+  "topic": "Demo",
+  "part": 1,
   "title": "Demo",
   "language": "en",
   "visual": {
@@ -271,7 +275,9 @@ Mỗi scene phải có ít nhất một trong:
 - `image`: safe filename trong `input/images`;
 - `image_prompt` hoặc `visual_hint` để provider tạo ảnh.
 
-Path phải là basename an toàn. Absolute path, `..`, subfolder và image extension khác PNG/JPG/JPEG/WebP đều fail. Scene IDs phải duy nhất, liên tục từ 1; text không rỗng; language chỉ `en`/`vi`.
+Script mới nên khai báo rõ `topic` (tên project dễ đọc), `part` (số nguyên dương) và `title`. Script cũ thiếu `topic` sẽ được suy ra từ `title` kèm warning; thiếu `part` mặc định là `1` kèm warning. Topic được chuyển thành slug Windows-safe, chặn absolute/UNC/path traversal, tên thiết bị reserved và ký tự `< > : " / \\ | ? *`.
+
+Path media phải là basename an toàn. Absolute path, `..`, subfolder và image extension khác PNG/JPG/JPEG/WebP đều fail. Scene IDs phải duy nhất, liên tục từ 1; text không rỗng; language chỉ `en`/`vi`.
 
 Local motion presets: `slow_push_in`, `slow_pull_out`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `drift_subtle`, `static`, `auto`.
 
@@ -294,15 +300,15 @@ work/audio/               WAV scene hoặc multi-scene chunk
 work/generated-images/    ảnh API + cache metadata
 work/motion/              image-motion clips
 work/alignment/           word timing diagnostics
+work/voice.wav            narration master của build hiện tại
 .cache/alignment/         model cache lâu dài
-output/voice.wav
-output/subtitles.srt
-output/subtitles.ass
-output/FINAL_VIDEO_EN_<số>.mp4
-output/FINAL_VIDEO_VI_<số>.mp4
+output/<topic>/Part_<NN>/EN/<topic>_Part_<NN>_EN_<số>.mp4
+output/<topic>/Part_<NN>/EN/<video-stem>.subtitles.srt|ass
+output/<topic>/Part_<NN>/EN/<topic>_Part_<NN>_EN_<số>.json
+output/<topic>/Part_<NN>/VI/<topic>_Part_<NN>_VI_<số>.mp4
 ```
 
-Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images/layered assets, generated-image cache hoặc video final cũ. Chỉ tên khớp chính xác `FINAL_VIDEO_EN_<integer>.mp4` hoặc `FINAL_VIDEO_VI_<integer>.mp4` tham gia dãy tương ứng.
+Rerun chỉ dọn intermediate build folders trong `work`; không xóa input clips/images/layered assets, generated-image cache hoặc video final cũ. Pipeline tự tạo topic/part/language folders. Chỉ filename đúng scope và khớp chính xác `<topic>_Part_<NN>_<EN|VI>_<integer>.mp4` tham gia dãy tương ứng; metadata JSON cạnh video không chứa credential.
 
 ## Pause-aware transition, SFX và watermark
 
@@ -313,12 +319,12 @@ Preset paper-documentary gồm `paper_swipe`, `paper_wipe`, `collage_push` và `
 Đo continuity trên final video bằng:
 
 ```powershell
-.venv\Scripts\python.exe tools\analyze_visual_continuity.py output\FINAL_VIDEO_EN_4.mp4 --transitions work\diagnostics\transitions.json --freeze work\diagnostics\visual_freeze.json --json work\diagnostics\visual_continuity_en.json
+.venv\Scripts\python.exe tools\analyze_visual_continuity.py output\Black_Wednesday\Part_01\EN\Black_Wednesday_Part_01_EN_1.mp4 --transitions work\diagnostics\transitions.json --freeze work\diagnostics\visual_freeze.json --json work\diagnostics\visual_continuity_en.json
 ```
 
 Verifier decode vùng hình phía trên subtitle/watermark, dùng mean absolute frame delta với ngưỡng chống codec noise, rồi báo `static_before_ms`, `transition_motion_ms`, `settle_ms` và `static_dead_zone_ms` cho từng boundary.
 
-Các section `source_cleanup`, `visual_quality`, `transitions`, `subtitles` và `watermark` trong `config.json` giữ safe-crop ratio, mask/median fallback, profile threshold, timing/gain và final style. Subtitle dùng nét viền đậm nhưng tắt ASS shadow để `\ko` không làm lộ bóng của từ tương lai trước timestamp alignment. `l0ki` dùng font file Windows, border/shadow nhẹ và safe margin rõ ràng để ổn định trên nền sáng/tối.
+Các section `source_cleanup`, `visual_quality`, `transitions`, `subtitles` và `watermark` trong `config.json` giữ local paper-patch ROI, safe-crop/median fallback explicit, profile threshold, timing/gain và final style. Chỉ scene có subtitle-band density cao mới tăng outline cho current karaoke text; ASS shadow vẫn tắt và `\ko` không làm lộ fill/outline/shadow của từ tương lai trước timestamp alignment. `l0ki` dùng font file Windows, border/shadow nhẹ và safe margin rõ ràng để ổn định trên nền sáng/tối.
 
 QA watermark trước/sau toàn bộ source/prepared scene:
 

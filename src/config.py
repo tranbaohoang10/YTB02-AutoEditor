@@ -119,6 +119,7 @@ class SourceCleanupConfig:
     height_ratio: float
     median_radius: int
     feather_px: int
+    paper_margin_px: int
     crop_width_ratio: float
     crop_height_ratio: float
 
@@ -135,6 +136,7 @@ class VisualQualityConfig:
     hierarchy_saturation: float
     hierarchy_brightness: float
     hierarchy_vignette_angle: float
+    subtitle_density_threshold: float
 
 
 @dataclass(frozen=True)
@@ -330,7 +332,7 @@ def load_config(path: Path) -> AppConfig:
             ),
             source_cleanup=SourceCleanupConfig(
                 enabled=source_cleanup_enabled,
-                strategy=str(source_cleanup.get("strategy", "median_texture_patch")),
+                strategy=str(source_cleanup.get("strategy", "paper_corner_patch")),
                 target=str(source_cleanup.get("target", "gemini_flow_sparkle")),
                 x_ratio=float(source_cleanup.get("x_ratio", 0.875)),
                 y_ratio=float(source_cleanup.get("y_ratio", 0.764)),
@@ -338,6 +340,7 @@ def load_config(path: Path) -> AppConfig:
                 height_ratio=float(source_cleanup.get("height_ratio", 0.185185)),
                 median_radius=int(source_cleanup.get("median_radius", 60)),
                 feather_px=int(source_cleanup.get("feather_px", 3)),
+                paper_margin_px=int(source_cleanup.get("paper_margin_px", 14)),
                 crop_width_ratio=float(
                     source_cleanup.get("crop_width_ratio", 0.885416667)
                 ),
@@ -367,6 +370,9 @@ def load_config(path: Path) -> AppConfig:
                 ),
                 hierarchy_vignette_angle=float(
                     visual_quality.get("hierarchy_vignette_angle", 0.448799)
+                ),
+                subtitle_density_threshold=float(
+                    visual_quality.get("subtitle_density_threshold", 0.070)
                 ),
             ),
             watermark=WatermarkConfig(
@@ -515,9 +521,12 @@ def load_config(path: Path) -> AppConfig:
     if not 0 <= result.subtitles.margin_horizontal <= result.video.width // 3:
         raise AutoEditorError("Subtitle margin_horizontal không hợp lệ.")
     cleanup = result.source_cleanup
-    if cleanup.strategy not in {"safe_edge_crop", "median_texture_patch"}:
+    if cleanup.strategy not in {
+        "paper_corner_patch", "safe_edge_crop", "median_texture_patch"
+    }:
         raise AutoEditorError(
-            "source_cleanup.strategy chỉ hỗ trợ safe_edge_crop/median_texture_patch."
+            "source_cleanup.strategy chỉ hỗ trợ paper_corner_patch/safe_edge_crop/"
+            "median_texture_patch."
         )
     if cleanup.target != "gemini_flow_sparkle":
         raise AutoEditorError("source_cleanup.target hiện chỉ hỗ trợ gemini_flow_sparkle.")
@@ -531,6 +540,8 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("Source-cleanup patch phải nằm trong khung hình.")
     if not 1 <= cleanup.median_radius <= 127 or not 0 <= cleanup.feather_px <= 20:
         raise AutoEditorError("Source-cleanup median/feather không hợp lệ.")
+    if not 4 <= cleanup.paper_margin_px <= 64:
+        raise AutoEditorError("Source-cleanup paper_margin_px phải trong 4..64.")
     if not 0.5 <= cleanup.crop_width_ratio <= 1.0 or not (
         0.5 <= cleanup.crop_height_ratio <= 1.0
     ):
@@ -552,6 +563,8 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("hierarchy_brightness phải trong -0.1..0.1.")
     if not 0.1 <= quality.hierarchy_vignette_angle <= 1.2:
         raise AutoEditorError("hierarchy_vignette_angle phải trong 0.1..1.2.")
+    if not 0.0 <= quality.subtitle_density_threshold <= 1.0:
+        raise AutoEditorError("subtitle_density_threshold phải trong 0..1.")
     if result.watermark.text != "l0ki":
         raise AutoEditorError("watermark.text phải đúng chính xác là 'l0ki'.")
     if result.watermark.position != "bottom_right":

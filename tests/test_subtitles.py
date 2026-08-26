@@ -180,6 +180,20 @@ class SubtitleTests(unittest.TestCase):
         self.assertIn("&HFF000000", ass)
         self.assertIn(",1,4,0,2,100,100,78,1", ass)
 
+    def test_dense_scene_gets_stronger_current_text_only_outline(self) -> None:
+        timeline, alignments = sample_scene()
+        phrases = create_subtitle_phrases(alignments, timeline, CONFIG)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "dense.ass"
+            write_phrase_ass(
+                phrases, path, CONFIG, 1920, 1080,
+                dense_scene_ids={phrases[0].scene_id},
+            )
+            ass = path.read_text(encoding="utf-8-sig")
+        self.assertIn(r"{\bord5}{\ko30}Before", ass)
+        self.assertIn("&HFFFFFFFF", ass)
+        self.assertNotIn(r"{\bord5}Next", ass)
+
 
 if __name__ == "__main__":
     unittest.main()

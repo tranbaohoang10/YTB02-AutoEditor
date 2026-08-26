@@ -11,6 +11,7 @@ from unittest.mock import patch
 from src.config import load_config
 from src.models import Scene, SceneAlignment, TimelineEntry, WordTiming
 from src.transitions import (
+    _avoid_major_repetition,
     avoid_source_sfx_conflicts, build_transition_sfx_mix,
     schedule_pause_aware_transitions, write_transition_diagnostics,
 )
@@ -41,6 +42,16 @@ def _fixture(boundary_pause: float, internal_pause: float = 0.05):
 
 
 class PauseAwareTransitionTests(unittest.TestCase):
+    def test_major_transition_repetition_guard(self) -> None:
+        effect, adjusted = _avoid_major_repetition(
+            "paper_wipe", ["micro_crossfade", "paper_wipe"], 3
+        )
+        self.assertTrue(adjusted)
+        self.assertNotEqual(effect, "paper_wipe")
+        history = ["paper_swipe", "micro_crossfade", "paper_swipe"]
+        effect, adjusted = _avoid_major_repetition("paper_swipe", history, 4)
+        self.assertTrue(adjusted)
+        self.assertNotEqual(effect, "paper_swipe")
     def setUp(self) -> None:
         self.config = load_config(ROOT / "config.json")
 
