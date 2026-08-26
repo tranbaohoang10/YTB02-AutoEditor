@@ -103,7 +103,9 @@ def main() -> int:
         "cleanup_enabled": config.source_cleanup.enabled,
         "cleanup_strategy": config.source_cleanup.strategy,
         "cleanup_target": config.source_cleanup.target,
-        "final_watermark_text": config.watermark.text,
+        "final_watermark_primary": config.watermark.text,
+        "final_watermark_logo": str(config.watermark.logo_file),
+        "final_watermark_show_secondary_text": config.watermark.show_secondary_text,
         "final_watermark_position": config.watermark.position,
         "source_logo_score_range": [round(min(source_scores), 6), round(max(source_scores), 6)],
         "prepared_logo_score_range": [
@@ -113,9 +115,11 @@ def main() -> int:
         "structural_checks": {
             "all_sources_have_prepared_output": len(sources) == len(prepared),
             "cleanup_happens_before_final": config.source_cleanup.enabled,
-            "only_configured_final_mark_is_l0ki": (
+            "configured_final_branding_is_icon_plus_l0ki_only": (
                 config.watermark.enabled
                 and config.watermark.text == "l0ki"
+                and not config.watermark.show_secondary_text
+                and config.watermark.logo_file.is_file()
                 and config.watermark.position == "bottom_right"
             ),
         },

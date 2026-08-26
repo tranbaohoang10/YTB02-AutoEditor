@@ -143,10 +143,12 @@ def ensure_paper_corner_patch(
 def _draw_flow_gemini_mask(
     width: int, height: int, feather_px: int,
 ) -> Image.Image:
-    """Create a precise two-sparkle alpha mask used by the current Flow clips.
+    """Create the precise single-sparkle mask used by the current Flow clips.
 
     Coordinates are normalized inside the configured cleanup rectangle so the
-    patch remains deterministic if output resolution changes.
+    patch remains deterministic if output resolution changes.  Only the fixed
+    screen-space Flow mark is covered; sparkle-like collage details elsewhere
+    in the ROI are deliberately preserved.
     """
     image = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(image)
@@ -154,16 +156,11 @@ def _draw_flow_gemini_mask(
     def point(x: float, y: float) -> tuple[int, int]:
         return round(x * width), round(y * height)
 
-    main = tuple(point(x, y) for x, y in (
-        (0.30, 0.00), (0.365, 0.24), (0.525, 0.375), (0.365, 0.49),
-        (0.30, 0.725), (0.235, 0.49), (0.075, 0.375), (0.235, 0.24),
+    mark = tuple(point(x, y) for x, y in (
+        (0.30, 0.10), (0.365, 0.28), (0.525, 0.375), (0.365, 0.47),
+        (0.30, 0.66), (0.235, 0.47), (0.075, 0.375), (0.235, 0.28),
     ))
-    secondary = tuple(point(x, y) for x, y in (
-        (0.625, 0.38), (0.70, 0.54), (0.95, 0.63), (0.70, 0.72),
-        (0.625, 0.95), (0.55, 0.72), (0.40, 0.63), (0.55, 0.54),
-    ))
-    draw.polygon(main, fill=255)
-    draw.polygon(secondary, fill=255)
+    draw.polygon(mark, fill=255)
     if feather_px:
         image = image.filter(ImageFilter.GaussianBlur(feather_px))
     return image
@@ -173,7 +170,9 @@ def ensure_flow_gemini_mask(
     directory: Path, width: int, height: int, config: SourceCleanupConfig,
 ) -> Path:
     _, _, patch_width, patch_height = source_cleanup_geometry(width, height, config)
-    destination = directory / f"flow_gemini_mask_v2_{patch_width}x{patch_height}.png"
+    destination = directory / (
+        f"flow_gemini_mask_v5_{patch_width}x{patch_height}_f{config.feather_px}.png"
+    )
     if destination.is_file() and destination.stat().st_size > 0:
         return destination
     directory.mkdir(parents=True, exist_ok=True)
@@ -341,6 +340,19 @@ def write_visual_profile_diagnostics(
             )
             affected_ratio = 1.0 - (
                 crop_width * crop_height / (config.video.width * config.video.height)
+            )
+        elif cleanup.strategy in {"masked_median_blend", "median_texture_patch"}:
+            patch_x, patch_y, patch_width, patch_height = source_cleanup_geometry(
+                config.video.width, config.video.height, cleanup
+            )
+            mask = np.asarray(
+                _draw_flow_gemini_mask(
+                    patch_width, patch_height, cleanup.feather_px
+                ),
+                dtype=np.uint8,
+            )
+            affected_ratio = float(np.count_nonzero(mask)) / (
+                config.video.width * config.video.height
             )
         else:
             patch_x, patch_y, patch_width, patch_height = source_cleanup_geometry(

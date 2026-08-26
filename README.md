@@ -17,7 +17,7 @@ Pipeline:
 - Loudness narration mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source-video audio được mix làm SFX nền ở gain mặc định `-18 dB`.
 - Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC stereo 48 kHz.
 - EN và VI có dãy độc lập trong từng scope `topic + part + language`. Mỗi dãy dùng số nguyên hợp lệ lớn nhất + 1, không lấp gap/ghi đè; render dùng file `.building.mp4`, được ffprobe validate rồi mới publish atomic.
-- Logo sparkle Gemini/Flow đã biết được che deterministic ở tầng prepared scene bằng paper-corner patch cục bộ 200×200 (matte 228×228 có torn edge), không crop/zoom toàn frame. `safe_edge_crop` chỉ còn là lựa chọn explicit; `l0ki` chỉ được burn một lần ở final render, bottom-right, sau subtitle/transition.
+- Logo sparkle Gemini/Flow đã biết được xóa deterministic ở tầng prepared scene bằng precise single-mark mask + local median blend feather mềm; mask phủ trọn mark chính nhưng không còn vùng phụ từng làm mất nội dung sạch, không còn paper rectangle và không crop/zoom toàn frame. `safe_edge_crop`/paper patch chỉ còn là lựa chọn explicit. Final channel bug burn đúng một lần sau subtitle/transition, chỉ gồm archival L icon và wordmark `l0ki`.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
 ## Workflow ưu tiên — motion graphics layered collage
@@ -207,7 +207,7 @@ Script V1 tiếp tục hoạt động:
 }
 ```
 
-Copy clip vào `input\videos`. Clip dài hơn narration bị trim. Với clip ngắn hơn, freeze tail trên ngưỡng cấu hình được che bằng tiny zoom/pan ease-in/out deterministic; clip có motion thấp còn nhận micro drift rất nhẹ. Nội dung ảnh không bị sinh thêm hoặc biến đổi generative. Video được scale giữ tỷ lệ và pad về canvas. Source Flow hiện tại được crop cạnh phải/dưới trước mọi freeze/motion/transition; contact-sheet audit xác nhận main focal point còn nguyên và các secondary edge label gây busy được giảm. Không dùng `l0ki` để che logo nguồn. Nếu clip có audio stream, pipeline lấy phần audio trong thời lượng thật của clip, fade in/out nhẹ và mix làm ambient/transition/paper/whoosh SFX; audio không loop khi phần hình kéo dài. Clip không có audio vẫn build bình thường.
+Copy clip vào `input\videos`. Clip dài hơn narration bị trim. Với clip ngắn hơn, freeze tail trên ngưỡng cấu hình được che bằng tiny zoom/pan ease-in/out deterministic; clip có motion thấp còn nhận micro drift rất nhẹ. Nội dung ảnh không bị sinh thêm hoặc biến đổi generative. Video được scale giữ tỷ lệ và pad về canvas. Source Flow hiện tại được cleanup bằng precise mask chỉ phủ trọn fixed screen-space mark chính và masked median blend trước mọi freeze/motion/transition; không crop toàn frame và không xóa vùng phụ sạch. Các zoom/pan của clip đã cleanup neo vào góc phải dưới để ROI không trượt khỏi channel bug trong tail motion. Nếu clip có audio stream, pipeline lấy phần audio trong thời lượng thật của clip, fade in/out nhẹ và mix làm ambient/transition/paper/whoosh SFX; audio không loop khi phần hình kéo dài. Clip không có audio vẫn build bình thường.
 
 Các mặc định audio quan trọng trong `config.json`:
 
@@ -324,7 +324,7 @@ Preset paper-documentary gồm `paper_swipe`, `paper_wipe`, `collage_push` và `
 
 Verifier decode vùng hình phía trên subtitle/watermark, dùng mean absolute frame delta với ngưỡng chống codec noise, rồi báo `static_before_ms`, `transition_motion_ms`, `settle_ms` và `static_dead_zone_ms` cho từng boundary.
 
-Các section `source_cleanup`, `visual_quality`, `transitions`, `subtitles` và `watermark` trong `config.json` giữ local paper-patch ROI, safe-crop/median fallback explicit, profile threshold, timing/gain và final style. Chỉ scene có subtitle-band density cao mới tăng outline cho current karaoke text; ASS shadow vẫn tắt và `\ko` không làm lộ fill/outline/shadow của từ tương lai trước timestamp alignment. `l0ki` dùng font file Windows, border/shadow nhẹ và safe margin rõ ràng để ổn định trên nền sáng/tối.
+Các section `source_cleanup`, `visual_quality`, `transitions`, `subtitles` và `watermark` trong `config.json` giữ precise sparkle ROI/mask, fallback explicit, profile threshold, timing/gain và final style. Chỉ scene có subtitle-band density cao mới tăng outline cho current karaoke text; ASS shadow vẫn tắt và `\ko` không làm lộ fill/outline/shadow của từ tương lai trước timestamp alignment. Channel bug không có background block: archival L icon 30px/0.68 đặt bên trái wordmark `l0ki` Georgia Italic 25px/0.68, với outline/shadow rất nhẹ. Cụm branding nằm cách mép phải và mép dưới 20px, đủ nhỏ để không cạnh tranh với nội dung hay subtitle.
 
 QA watermark trước/sau toàn bộ source/prepared scene:
 
@@ -332,7 +332,7 @@ QA watermark trước/sau toàn bộ source/prepared scene:
 .venv\Scripts\python.exe tools\analyze_watermark_cleanup.py --source-dir input\videos --prepared-dir work\scenes --output-dir work\diagnostics\watermark --json work\diagnostics\watermark_cleanup.json
 ```
 
-Tool tạo contact sheet ở 0.5/2.0/3.5 giây cho từng scene, xác nhận đủ prepared output, cleanup chạy pre-final và mark final cấu hình duy nhất là `l0ki`. Contact sheet vẫn là visual gate bắt buộc vì texture/logo là tín hiệu hình ảnh, không được kết luận chỉ bằng một scalar score.
+Tool tạo contact sheet ở 0.5/2.0/3.5 giây cho từng scene, xác nhận đủ prepared output, cleanup chạy pre-final và final branding chỉ gồm archival icon + `l0ki`, không secondary text. Contact sheet vẫn là visual gate bắt buộc vì texture/logo là tín hiệu hình ảnh, không được kết luận chỉ bằng một scalar score.
 
 ## Nhịp narration, forced alignment và subtitle
 

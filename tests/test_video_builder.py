@@ -247,6 +247,49 @@ class VideoBuilderTests(unittest.TestCase):
         self.assertIn("vignette=angle=", graph)
         self.assertIn("zoompan=", graph)
 
+    def test_default_cleanup_uses_precise_masked_median_without_global_patch(self) -> None:
+        config = load_config(ROOT / "config.json")
+        profile = SceneVisualProfile(
+            3, "video", 0.08, 0.01, 0.08, "high", "low", True,
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            prepare_video_scene(
+                root / "scene_03.mp4", root / "out.mp4", 3.0, config,
+                source_duration=4.0, visual_profile=profile,
+            )
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertEqual(command.count("-i"), 2)
+        self.assertIn("flow_gemini_mask_v5_200x200_f3.png", " ".join(command))
+        self.assertIn("median=radius=30", graph)
+        self.assertIn("alphamerge", graph)
+        self.assertIn("overlay=1680:824", graph)
+        self.assertNotIn("crop=1700:956:0:0", graph)
+        self.assertNotIn("paper_corner_patch", " ".join(command))
+
+    def test_cleanup_motion_keeps_bottom_right_roi_anchored(self) -> None:
+        config = load_config(ROOT / "config.json")
+        profile = SceneVisualProfile(
+            3, "video", 0.08, 0.01, 0.08, "high", "low", True,
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            prepare_video_scene(
+                root / "scene_03.mp4", root / "out.mp4", 5.2, config,
+                source_duration=4.0, visual_profile=profile,
+            )
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertEqual(
+            graph.count("x='iw-iw/zoom':y='ih-ih/zoom'"),
+            2,
+        )
+
     def test_final_encode_signals_limited_bt709_contract(self) -> None:
         config = load_config(ROOT / "config.json")
         with tempfile.TemporaryDirectory() as directory, patch(
@@ -269,10 +312,19 @@ class VideoBuilderTests(unittest.TestCase):
         )
         video_filter = command[command.index("-vf") + 1]
         self.assertIn("ass=filename=", video_filter)
-        self.assertIn("drawtext=fontfile='C\\:/Windows/Fonts/arial.ttf':text='l0ki'",
-                      video_filter)
-        self.assertIn("x=w-text_w-58:y=h-text_h-50", video_filter)
-        self.assertIn("borderw=1:bordercolor=black@0.720", video_filter)
+        self.assertIn(
+            "drawtext=fontfile='C\\:/Windows/Fonts/georgiai.ttf':text='l0ki'",
+            video_filter,
+        )
+        self.assertIn("l0ki_archival_mark.png", video_filter)
+        self.assertIn("scale=30:30:flags=lanczos", video_filter)
+        self.assertIn("colorchannelmixer=aa=0.680", video_filter)
+        self.assertIn("overlay=x=W-w-69:y=H-h-20", video_filter)
+        self.assertIn("x=w-text_w-20", video_filter)
+        self.assertIn("borderw=1:bordercolor=black@0.420", video_filter)
+        self.assertEqual(video_filter.count("text='l0ki'"), 1)
+        self.assertNotIn("Hau Nguyen", video_filter)
+        self.assertEqual(video_filter.count("drawtext="), 1)
         self.assertLess(video_filter.index("ass="), video_filter.index("drawtext="))
 
     def test_final_mix_keeps_narration_primary_and_adds_source_sfx(self) -> None:
