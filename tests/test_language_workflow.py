@@ -14,12 +14,14 @@ class LanguageWorkflowTests(unittest.TestCase):
         script = json.loads((ROOT / "input/script.en.json").read_text(encoding="utf-8"))
         self.assertEqual((script["language"], script["voice"], script["speed"]),
                          ("en", "am_eric", 1.0))
+        self.assertEqual((script["topic"], script["part"]), ("Black Wednesday", 1))
         self.assertEqual(len(script["scenes"]), 30)
 
     def test_permanent_vietnamese_script_contract(self) -> None:
         script = json.loads((ROOT / "input/script.vi.json").read_text(encoding="utf-8"))
         self.assertEqual((script["language"], script["voice"], script["speed"]),
                          ("vi", "hung_thinh", 1.0))
+        self.assertEqual((script["topic"], script["part"]), ("Black Wednesday", 1))
         self.assertEqual(len(script["scenes"]), 30)
 
     def test_entrypoints_map_to_their_permanent_scripts(self) -> None:

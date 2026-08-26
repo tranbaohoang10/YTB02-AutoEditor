@@ -187,6 +187,31 @@ def _effect_for_boundary(
     return "micro_crossfade", False, "continuity_micro_crossfade"
 
 
+_MAJOR_EFFECTS = ("paper_swipe", "paper_wipe", "collage_push")
+
+
+def _avoid_major_repetition(
+    effect: str, history: Sequence[str], boundary_index: int,
+) -> tuple[str, bool]:
+    """Prevent adjacent repeats and >2 uses in any four-boundary window."""
+    if effect not in _MAJOR_EFFECTS:
+        return effect, False
+    candidates = [
+        effect,
+        *(
+            _MAJOR_EFFECTS[(boundary_index + offset) % len(_MAJOR_EFFECTS)]
+            for offset in range(len(_MAJOR_EFFECTS))
+        ),
+    ]
+    for candidate in dict.fromkeys(candidates):
+        if history and history[-1] == candidate:
+            continue
+        if [*history[-3:], candidate].count(candidate) > 2:
+            continue
+        return candidate, candidate != effect
+    return "micro_crossfade", True
+
+
 def schedule_pause_aware_transitions(
     timeline: Sequence[TimelineEntry], alignments: Sequence[SceneAlignment],
     config: TransitionConfig, *, fps: int = 30,
@@ -226,6 +251,11 @@ def schedule_pause_aware_transitions(
         selected_effect, accented, visual_intent = _effect_for_boundary(
             boundary_index, pause_ms, config, left_profile, right_profile
         )
+        selected_effect, repetition_adjusted = _avoid_major_repetition(
+            selected_effect, [item.effect for item in decisions], boundary_index
+        )
+        if repetition_adjusted:
+            visual_intent += "_repetition_guard"
         bridge = bool(
             config.pause_aware and config.enable_visual
             and selected_effect != "none"
@@ -506,6 +536,16 @@ def write_transition_diagnostics(
         })
     visual_count = sum(decision.has_visual for decision in decisions)
     sfx_count = sum(decision.has_sfx for decision in decisions)
+    effects = [decision.effect for decision in decisions]
+    major_effects = [effect for effect in effects if effect in _MAJOR_EFFECTS]
+    adjacent_major_repeats = sum(
+        left == right and left in _MAJOR_EFFECTS
+        for left, right in zip(effects, effects[1:])
+    )
+    rolling_major_overuse = sum(
+        any(window.count(effect) > 2 for effect in _MAJOR_EFFECTS)
+        for window in (effects[index:index + 4] for index in range(max(0, len(effects) - 3)))
+    )
     payload: dict[str, object] = {
         "boundary_count": len(decisions),
         "eligible_pause_count": sum(decision.eligible for decision in decisions),
@@ -518,6 +558,9 @@ def write_transition_diagnostics(
             not decision.has_visual for decision in decisions
         ),
         "narration_timeline_changed": False,
+        "major_transition_count": len(major_effects),
+        "adjacent_major_repeat_count": adjacent_major_repeats,
+        "rolling_four_major_overuse_count": rolling_major_overuse,
         "boundaries": records,
         "internal_pauses": _internal_pause_summary(timeline, alignments),
     }

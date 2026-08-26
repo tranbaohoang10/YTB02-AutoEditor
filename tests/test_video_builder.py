@@ -224,6 +224,10 @@ class VideoBuilderTests(unittest.TestCase):
 
     def test_video_profile_applies_safe_edge_crop_before_quality_filters(self) -> None:
         config = load_config(ROOT / "config.json")
+        config = replace(
+            config,
+            source_cleanup=replace(config.source_cleanup, strategy="safe_edge_crop"),
+        )
         profile = SceneVisualProfile(
             3, "video", 0.08, 0.01, 0.08, "high", "low", True,
         )

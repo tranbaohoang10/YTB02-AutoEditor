@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -145,6 +147,19 @@ def load_script(
     title = raw.get("title", "")
     if not isinstance(title, str):
         raise AutoEditorError("'title' phải là chuỗi.")
+    topic = raw.get("topic")
+    if topic is None:
+        topic = re.sub(r"\s+-\s+(?:Part|Phần)\s+\d+\s*$", "", title, flags=re.I)
+        topic = topic.strip() or path.stem
+        warnings.warn("Script thiếu 'topic'; tạm suy ra từ title.", UserWarning)
+    if not isinstance(topic, str) or not topic.strip():
+        raise AutoEditorError("'topic' phải là chuỗi không rỗng.")
+    part = raw.get("part")
+    if part is None:
+        part = 1
+        warnings.warn("Script thiếu 'part'; tạm dùng part=1.", UserWarning)
+    if isinstance(part, bool) or not isinstance(part, int) or part <= 0:
+        raise AutoEditorError("'part' phải là số nguyên dương.")
     voice = raw.get("voice") or DEFAULT_VOICES[language]
     if not isinstance(voice, str) or not voice.strip():
         raise AutoEditorError("'voice' không được để trống.")
@@ -187,6 +202,7 @@ def load_script(
                     f"Scene {scene.id}: manual image provider cần file image có sẵn."
                 )
     return Script(
-        title=title.strip(), language=language, voice=voice.strip(),
+        title=title.strip(), topic=topic.strip(), part=part,
+        language=language, voice=voice.strip(),
         speed=float(speed), scenes=tuple(scenes), visual=visual,
     )

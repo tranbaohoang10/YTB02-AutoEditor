@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
 from src.models import AutoEditorError
@@ -43,6 +44,21 @@ class ScriptLoaderTests(unittest.TestCase):
         script = load_script(self.write(self.valid_data()), self.videos)
         self.assertEqual([scene.id for scene in script.scenes], [1, 2])
         self.assertEqual(script.language, "en")
+
+    def test_explicit_topic_and_part_are_parsed(self) -> None:
+        data = self.valid_data()
+        data.update({"topic": "Black Wednesday", "part": 2})
+        script = load_script(self.write(data), self.videos)
+        self.assertEqual((script.topic, script.part), ("Black Wednesday", 2))
+
+    def test_old_script_derives_topic_and_defaults_part_with_warnings(self) -> None:
+        data = self.valid_data()
+        data["title"] = "Black Wednesday - Part 3"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            script = load_script(self.write(data), self.videos)
+        self.assertEqual((script.topic, script.part), ("Black Wednesday", 1))
+        self.assertEqual(len(caught), 2)
 
     def test_default_speed_is_1_0_when_omitted(self) -> None:
         data = self.valid_data()

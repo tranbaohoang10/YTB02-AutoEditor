@@ -38,6 +38,8 @@ class Script:
     speed: float
     scenes: tuple[Scene, ...]
     visual: VisualSettings = VisualSettings()
+    topic: str = ""
+    part: int = 1
 
 
 @dataclass(frozen=True)

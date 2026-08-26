@@ -16,8 +16,8 @@ from .layered_manifest import SceneTransition
 from .models import AutoEditorError
 from .narration import PauseCompressionReport, compress_smart_pauses
 from .visual_quality import (
-    SceneVisualProfile, ensure_flow_gemini_mask, source_cleanup_geometry,
-    source_edge_crop_geometry,
+    SceneVisualProfile, ensure_flow_gemini_mask, ensure_paper_corner_patch,
+    source_cleanup_geometry, source_edge_crop_geometry, source_paper_patch_geometry,
 )
 
 
@@ -219,7 +219,20 @@ def prepare_video_scene(
     base = ",".join(base_filters)
     graph_parts: list[str] = []
     prepared_label = "preparedbase"
-    if cleanup_source and config.source_cleanup.strategy == "median_texture_patch":
+    if cleanup_source and config.source_cleanup.strategy == "paper_corner_patch":
+        patch = ensure_paper_corner_patch(
+            destination.parent, video.width, video.height, config.source_cleanup
+        )
+        x, y, _, _ = source_paper_patch_geometry(
+            video.width, video.height, config.source_cleanup
+        )
+        command.extend(["-loop", "1", "-framerate", str(video.fps), "-i", str(patch)])
+        graph_parts.extend([
+            f"[0:v]{base}[cleanbase]",
+            f"[cleanbase][1:v]overlay={x}:{y}:shortest=1[cleaned]",
+        ])
+        source_label = "cleaned"
+    elif cleanup_source and config.source_cleanup.strategy == "median_texture_patch":
         mask = ensure_flow_gemini_mask(
             destination.parent, video.width, video.height, config.source_cleanup
         )

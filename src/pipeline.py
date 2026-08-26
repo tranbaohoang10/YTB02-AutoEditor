@@ -23,6 +23,7 @@ from .layered_manifest import SceneTransition, load_layered_manifest
 from .motion_service import render_image_motion
 from .motion_providers.ai_image_to_video import create_ai_motion_provider
 from .models import AutoEditorError, Script, TimelineEntry
+from .output_manager import publish_output, reserve_output
 from .script_loader import load_script
 from .subtitles import (
     create_rolling_cues, create_subtitle_phrases, write_phrase_ass, write_srt,
@@ -137,6 +138,7 @@ def _clean_work_directory(work_dir: Path) -> tuple[Path, Path, Path, Path]:
 
 def _display_dry_run(script: Script, videos_dir: Path, images_dir: Path) -> None:
     print(f"Title: {script.title or '(không có)'}")
+    print(f"Topic: {script.topic} | Part: {script.part:02d}")
     print(f"Language: {script.language} | Voice: {script.voice} | Speed: {script.speed}")
     print(f"Scenes: {len(script.scenes)}")
     for scene in script.scenes:
@@ -214,7 +216,9 @@ def _analyze_visual_profiles(
             profiles[entry.scene.id] = neutral_visual_profile(
                 entry.scene.id, asset.kind
             )
-    write_visual_profile_diagnostics(tuple(profiles.values()), diagnostics_path)
+    write_visual_profile_diagnostics(
+        tuple(profiles.values()), diagnostics_path, config=config
+    )
     return profiles
 
 
@@ -340,6 +344,10 @@ def run_pipeline(
     script = load_script(
         script_path, videos_dir, images_dir, scenes_dir=layered_scenes_dir
     )
+    print(
+        f"       TOPIC={script.topic} | PART={script.part:02d} | "
+        f"LANGUAGE={script.language.upper()}"
+    )
     if dry_run:
         for scene in script.scenes:
             if scene.assets:
@@ -416,7 +424,7 @@ def run_pipeline(
     )
 
     print("[5/10] Building audio master timeline")
-    voice_path = output_dir / "voice.wav"
+    voice_path = work_dir / "voice.wav"
     join_gap_ms = (
         config.audio.pause_profiles[script.language].chunk_join_ms
         if config.audio.narration_mode == "continuous" else config.audio.gap_ms
@@ -556,20 +564,27 @@ def run_pipeline(
     print("[9/10] Creating stable phrase subtitles")
     phrases = create_subtitle_phrases(alignments, timeline, config.subtitles)
     cues = create_rolling_cues(alignments, timeline, config.subtitles)
-    srt_path = output_dir / "subtitles.srt"
-    ass_path = output_dir / "subtitles.ass"
-    write_srt(cues, srt_path)
-    write_phrase_ass(
-        phrases, ass_path, config.subtitles, config.video.width, config.video.height
-    )
-    write_subtitle_diagnostics(
-        phrases, work_dir / "diagnostics" / "subtitles.json", config.subtitles
-    )
-
-    final_path = reserve_final_video_path(output_dir, script.language)
-    temporary = output_dir / f"{final_path.stem}.building.mp4"
-    print(f"[10/10] Rendering {final_path.name}")
+    reservation = reserve_output(output_dir, script)
+    delivery_dir = reservation.final_path.parent
+    final_path = reservation.final_path
+    temporary = reservation.temporary_path
+    srt_path = delivery_dir / f"{final_path.stem}.subtitles.srt"
+    ass_path = delivery_dir / f"{final_path.stem}.subtitles.ass"
     try:
+        write_srt(cues, srt_path)
+        write_phrase_ass(
+            phrases, ass_path, config.subtitles, config.video.width,
+            config.video.height,
+            dense_scene_ids={
+                scene_id for scene_id, profile in visual_profiles.items()
+                if profile.subtitle_background_class == "high"
+            },
+        )
+        write_subtitle_diagnostics(
+            phrases, work_dir / "diagnostics" / "subtitles.json", config.subtitles
+        )
+
+        print(f"[10/10] Rendering {final_path.name}")
         if temporary.is_file():
             temporary.unlink()
         render_final_video(
@@ -577,12 +592,15 @@ def run_pipeline(
             source_sfx_path if has_source_sfx else None,
             transition_sfx_path if has_transition_sfx else None,
         )
-        atomic_replace_final(temporary, final_path)
+        publish_output(reservation, script, config)
     except BaseException:
         if temporary.is_file():
             temporary.unlink()
         if final_path.is_file() and final_path.stat().st_size == 0:
             final_path.unlink()
+        for subtitle_path in (srt_path, ass_path):
+            if subtitle_path.is_file():
+                subtitle_path.unlink()
         raise
     print("\nDONE")
     return final_path
