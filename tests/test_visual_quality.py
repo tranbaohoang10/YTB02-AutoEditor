@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -28,7 +29,7 @@ class VisualQualityTests(unittest.TestCase):
             (1700, 956),
         )
 
-    def test_generated_mask_is_feathered_and_covers_two_sparkles(self) -> None:
+    def test_generated_mask_is_feathered_and_only_covers_fixed_flow_mark(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = ensure_flow_gemini_mask(
                 Path(directory), 1920, 1080, self.config.source_cleanup
@@ -37,8 +38,22 @@ class VisualQualityTests(unittest.TestCase):
             pixels = np.asarray(Image.open(path).convert("L"))
         self.assertEqual(pixels.shape, (200, 200))
         self.assertGreater(pixels[75, 60], 240)
-        self.assertGreater(pixels[126, 125], 240)
+        self.assertLess(pixels[126, 125], 8)
         self.assertTrue(np.any((pixels > 0) & (pixels < 255)))
+
+    def test_mask_cache_key_includes_feather_radius(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feathered = ensure_flow_gemini_mask(
+                root, 1920, 1080, self.config.source_cleanup
+            )
+            softer = ensure_flow_gemini_mask(
+                root, 1920, 1080,
+                replace(self.config.source_cleanup, feather_px=5),
+            )
+        self.assertNotEqual(feathered.name, softer.name)
+        self.assertIn("_f3.png", feathered.name)
+        self.assertIn("_f5.png", softer.name)
 
     def test_logo_score_detects_bright_sparkle_pattern(self) -> None:
         frames = np.full((3, 180, 320), 100, dtype=np.uint8)

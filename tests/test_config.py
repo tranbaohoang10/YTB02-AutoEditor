@@ -51,13 +51,27 @@ class ConfigTests(unittest.TestCase):
         config = load_config(root / "config.json")
         self.assertTrue(config.watermark.enabled)
         self.assertEqual(config.watermark.text, "l0ki")
+        self.assertFalse(config.watermark.show_secondary_text)
         self.assertEqual(config.watermark.position, "bottom_right")
-        self.assertEqual(config.watermark.opacity, 0.86)
+        self.assertEqual(
+            config.watermark.logo_file,
+            root / "assets" / "branding" / "l0ki_archival_mark.png",
+        )
+        self.assertTrue(config.watermark.logo_file.is_file())
+        self.assertEqual(config.watermark.logo_size, 30)
+        self.assertEqual(config.watermark.logo_opacity, 0.68)
+        self.assertEqual(config.watermark.logo_text_gap, 6)
+        self.assertEqual(config.watermark.font_size, 25)
+        self.assertEqual(config.watermark.opacity, 0.68)
         self.assertEqual((config.watermark.margin_right, config.watermark.margin_bottom),
-                         (58, 50))
+                         (20, 20))
         self.assertEqual(config.watermark.border_width, 1)
         self.assertTrue(config.source_cleanup.enabled)
-        self.assertEqual(config.source_cleanup.strategy, "paper_corner_patch")
+        self.assertEqual(config.source_cleanup.strategy, "masked_median_blend")
+        self.assertEqual(
+            (config.source_cleanup.median_radius, config.source_cleanup.feather_px),
+            (30, 3),
+        )
         self.assertTrue(config.visual_quality.enabled)
         self.assertEqual(config.subtitles.font_size, 56)
         self.assertTrue(config.subtitles.bold)

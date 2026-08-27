@@ -95,7 +95,12 @@ class AlignmentConfig:
 class WatermarkConfig:
     enabled: bool
     text: str
+    show_secondary_text: bool
     position: str
+    logo_file: Path
+    logo_size: int
+    logo_opacity: float
+    logo_text_gap: int
     font: str
     font_file: Path | None
     font_size: int
@@ -104,6 +109,7 @@ class WatermarkConfig:
     margin_bottom: int
     shadow_x: int
     shadow_y: int
+    shadow_opacity: float
     border_width: int
     border_opacity: float
 
@@ -221,6 +227,9 @@ def load_config(path: Path) -> AppConfig:
         if not isinstance(subtitle_bold, bool):
             raise TypeError("subtitles.bold phải là boolean")
         watermark_enabled = watermark.get("enabled", True)
+        watermark_show_secondary_text = watermark.get(
+            "show_secondary_text", False
+        )
         source_cleanup_enabled = source_cleanup.get("enabled", False)
         visual_quality_enabled = visual_quality.get("enabled", True)
         transition_pause_aware = transitions.get("pause_aware", True)
@@ -228,6 +237,7 @@ def load_config(path: Path) -> AppConfig:
         transition_sfx = transitions.get("enable_sfx", True)
         for label, value in (
             ("watermark.enabled", watermark_enabled),
+            ("watermark.show_secondary_text", watermark_show_secondary_text),
             ("source_cleanup.enabled", source_cleanup_enabled),
             ("visual_quality.enabled", visual_quality_enabled),
             ("transitions.pause_aware", transition_pause_aware),
@@ -239,6 +249,11 @@ def load_config(path: Path) -> AppConfig:
         kokoro_python = Path(str(data["kokoro_python"]))
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
+        watermark_logo_file = Path(str(watermark.get(
+            "logo_file", "assets/branding/l0ki_archival_mark.png"
+        )))
+        if not watermark_logo_file.is_absolute():
+            watermark_logo_file = (path.parent / watermark_logo_file).resolve()
         raw_pause_profiles = audio.get("pause_profiles", {})
         if not isinstance(raw_pause_profiles, dict):
             raise TypeError("audio.pause_profiles phải là object")
@@ -332,13 +347,13 @@ def load_config(path: Path) -> AppConfig:
             ),
             source_cleanup=SourceCleanupConfig(
                 enabled=source_cleanup_enabled,
-                strategy=str(source_cleanup.get("strategy", "paper_corner_patch")),
+                strategy=str(source_cleanup.get("strategy", "masked_median_blend")),
                 target=str(source_cleanup.get("target", "gemini_flow_sparkle")),
                 x_ratio=float(source_cleanup.get("x_ratio", 0.875)),
                 y_ratio=float(source_cleanup.get("y_ratio", 0.764)),
                 width_ratio=float(source_cleanup.get("width_ratio", 0.104167)),
                 height_ratio=float(source_cleanup.get("height_ratio", 0.185185)),
-                median_radius=int(source_cleanup.get("median_radius", 60)),
+                median_radius=int(source_cleanup.get("median_radius", 30)),
                 feather_px=int(source_cleanup.get("feather_px", 3)),
                 paper_margin_px=int(source_cleanup.get("paper_margin_px", 14)),
                 crop_width_ratio=float(
@@ -378,20 +393,26 @@ def load_config(path: Path) -> AppConfig:
             watermark=WatermarkConfig(
                 enabled=watermark_enabled,
                 text=str(watermark.get("text", "l0ki")),
+                show_secondary_text=watermark_show_secondary_text,
                 position=str(watermark.get("position", "bottom_right")),
-                font=str(watermark.get("font", "Arial")),
+                logo_file=watermark_logo_file,
+                logo_size=int(watermark.get("logo_size", 30)),
+                logo_opacity=float(watermark.get("logo_opacity", 0.68)),
+                logo_text_gap=int(watermark.get("logo_text_gap", 6)),
+                font=str(watermark.get("font", "Georgia Italic")),
                 font_file=(
                     Path(str(watermark["font_file"]))
                     if watermark.get("font_file") else None
                 ),
-                font_size=int(watermark.get("font_size", 28)),
-                opacity=float(watermark.get("opacity", 0.72)),
-                margin_right=int(watermark.get("margin_right", 50)),
-                margin_bottom=int(watermark.get("margin_bottom", 45)),
-                shadow_x=int(watermark.get("shadow_x", 2)),
-                shadow_y=int(watermark.get("shadow_y", 2)),
+                font_size=int(watermark.get("font_size", 25)),
+                opacity=float(watermark.get("opacity", 0.68)),
+                margin_right=int(watermark.get("margin_right", 20)),
+                margin_bottom=int(watermark.get("margin_bottom", 20)),
+                shadow_x=int(watermark.get("shadow_x", 1)),
+                shadow_y=int(watermark.get("shadow_y", 1)),
+                shadow_opacity=float(watermark.get("shadow_opacity", 0.22)),
                 border_width=int(watermark.get("border_width", 1)),
-                border_opacity=float(watermark.get("border_opacity", 0.72)),
+                border_opacity=float(watermark.get("border_opacity", 0.42)),
             ),
             transitions=TransitionConfig(
                 pause_aware=transition_pause_aware,
@@ -522,11 +543,12 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("Subtitle margin_horizontal không hợp lệ.")
     cleanup = result.source_cleanup
     if cleanup.strategy not in {
-        "paper_corner_patch", "safe_edge_crop", "median_texture_patch"
+        "masked_median_blend", "paper_corner_patch", "safe_edge_crop",
+        "median_texture_patch",
     }:
         raise AutoEditorError(
-            "source_cleanup.strategy chỉ hỗ trợ paper_corner_patch/safe_edge_crop/"
-            "median_texture_patch."
+            "source_cleanup.strategy chỉ hỗ trợ masked_median_blend/"
+            "paper_corner_patch/safe_edge_crop/median_texture_patch."
         )
     if cleanup.target != "gemini_flow_sparkle":
         raise AutoEditorError("source_cleanup.target hiện chỉ hỗ trợ gemini_flow_sparkle.")
@@ -567,8 +589,20 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("subtitle_density_threshold phải trong 0..1.")
     if result.watermark.text != "l0ki":
         raise AutoEditorError("watermark.text phải đúng chính xác là 'l0ki'.")
+    if result.watermark.show_secondary_text:
+        raise AutoEditorError("watermark.show_secondary_text phải là false.")
     if result.watermark.position != "bottom_right":
         raise AutoEditorError("watermark.position hiện chỉ hỗ trợ 'bottom_right'.")
+    if not result.watermark.logo_file.is_file():
+        raise AutoEditorError(
+            f"Không tìm thấy watermark.logo_file: {result.watermark.logo_file}"
+        )
+    if not 12 <= result.watermark.logo_size <= 96:
+        raise AutoEditorError("watermark.logo_size phải trong khoảng 12..96.")
+    if not 0.0 < result.watermark.logo_opacity <= 1.0:
+        raise AutoEditorError("watermark.logo_opacity phải trong khoảng (0, 1].")
+    if not 0 <= result.watermark.logo_text_gap <= 30:
+        raise AutoEditorError("watermark.logo_text_gap phải trong khoảng 0..30.")
     if not 8 <= result.watermark.font_size <= 120:
         raise AutoEditorError("watermark.font_size phải trong khoảng 8..120.")
     if not 0.0 < result.watermark.opacity <= 1.0:
@@ -579,6 +613,8 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("watermark.border_width phải trong khoảng 0..10.")
     if not 0.0 <= result.watermark.border_opacity <= 1.0:
         raise AutoEditorError("watermark.border_opacity phải trong khoảng 0..1.")
+    if not 0.0 <= result.watermark.shadow_opacity <= 1.0:
+        raise AutoEditorError("watermark.shadow_opacity phải trong khoảng 0..1.")
     if result.transitions.style != "paper_documentary":
         raise AutoEditorError("transitions.style hiện chỉ hỗ trợ 'paper_documentary'.")
     pause_thresholds = (

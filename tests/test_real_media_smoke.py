@@ -379,7 +379,8 @@ class RealMediaSmokeTests(unittest.TestCase):
             config, ffmpeg=ffmpeg, ffprobe=ffprobe,
             video=replace(config.video, width=320, height=180, preset="ultrafast"),
             watermark=replace(
-                config.watermark, font_size=20, margin_right=14, margin_bottom=12,
+                config.watermark, logo_size=18, font_size=16,
+                margin_right=14, margin_bottom=12,
             ),
         )
         with tempfile.TemporaryDirectory() as directory:

@@ -232,7 +232,9 @@ def prepare_video_scene(
             f"[cleanbase][1:v]overlay={x}:{y}:shortest=1[cleaned]",
         ])
         source_label = "cleaned"
-    elif cleanup_source and config.source_cleanup.strategy == "median_texture_patch":
+    elif cleanup_source and config.source_cleanup.strategy in {
+        "masked_median_blend", "median_texture_patch",
+    }:
         mask = ensure_flow_gemini_mask(
             destination.parent, video.width, video.height, config.source_cleanup
         )
@@ -270,11 +272,13 @@ def prepare_video_scene(
             frames = max(1, round(duration * video.fps))
             direction = sum(source.name.encode("utf-8")) % 4
             x_expression = (
+                "iw-iw/zoom" if cleanup_source else
                 "0" if direction == 0 else
                 "iw-iw/zoom" if direction == 1 else
                 "(iw-iw/zoom)/2"
             )
             y_expression = (
+                "ih-ih/zoom" if cleanup_source else
                 "0" if direction == 2 else
                 "ih-ih/zoom" if direction == 3 else
                 "(ih-ih/zoom)/2"
@@ -302,11 +306,13 @@ def prepare_video_scene(
         zoom_amount = 0.012 if freeze_tail <= 0.5 else 0.020 if freeze_tail <= 0.9 else 0.028
         direction = sum(source.name.encode("utf-8")) % 4
         x_expression = (
+            "iw-iw/zoom" if cleanup_source else
             "0" if direction == 0 else
             "iw-iw/zoom" if direction == 1 else
             "(iw-iw/zoom)/2"
         )
         y_expression = (
+            "ih-ih/zoom" if cleanup_source else
             "0" if direction == 2 else
             "ih-ih/zoom" if direction == 3 else
             "(ih-ih/zoom)/2"
@@ -478,7 +484,7 @@ def render_final_video(
     transition_audio_path: Path | None = None,
 ) -> None:
     video = config.video
-    video_filters = [f"ass=filename='{ffmpeg_filter_path(ass_path)}'"]
+    subtitle_filter = f"ass=filename='{ffmpeg_filter_path(ass_path)}'"
     if config.watermark.enabled:
         font = config.watermark.font.replace("\\", r"\\").replace("'", r"\'")
         text = config.watermark.text.replace("\\", r"\\").replace("'", r"\'")
@@ -486,20 +492,43 @@ def render_final_video(
             f"fontfile='{ffmpeg_filter_path(config.watermark.font_file)}'"
             if config.watermark.font_file is not None else f"font='{font}'"
         )
-        video_filters.append(
+        wordmark_width = round(config.watermark.font_size * 1.72)
+        mark_right_offset = (
+            config.watermark.margin_right
+            + wordmark_width
+            + config.watermark.logo_text_gap
+        )
+        mark_x = f"W-w-{mark_right_offset}"
+        mark_y = f"H-h-{config.watermark.margin_bottom}"
+        wordmark_filter = (
             "drawtext="
             f"{font_option}:text='{text}':"
-            f"fontcolor=white@{config.watermark.opacity:.3f}:"
+            f"fontcolor=0xEEE8DC@{config.watermark.opacity:.3f}:"
             f"fontsize={config.watermark.font_size}:"
             f"x=w-text_w-{config.watermark.margin_right}:"
-            f"y=h-text_h-{config.watermark.margin_bottom}:"
+            f"y=h-{config.watermark.margin_bottom}-"
+            f"({config.watermark.logo_size}+text_h)/2:"
             f"borderw={config.watermark.border_width}:"
             f"bordercolor=black@{config.watermark.border_opacity:.3f}:"
-            "shadowcolor=black@0.650:"
+            f"shadowcolor=black@{config.watermark.shadow_opacity:.3f}:"
             f"shadowx={config.watermark.shadow_x}:shadowy={config.watermark.shadow_y}"
         )
-    video_filters.extend(["format=yuv420p", "setparams=range=tv"])
-    final_video_filter = ",".join(video_filters)
+        logo_filter = (
+            f"movie=filename='{ffmpeg_filter_path(config.watermark.logo_file)}',"
+            f"scale={config.watermark.logo_size}:{config.watermark.logo_size}:"
+            "flags=lanczos,format=rgba,"
+            f"colorchannelmixer=aa={config.watermark.logo_opacity:.3f}[brandmark]"
+        )
+        final_video_filter = (
+            f"{logo_filter};[in]{subtitle_filter}[subtitled];"
+            f"[subtitled][brandmark]overlay=x={mark_x}:y={mark_y}:"
+            "eof_action=repeat:repeatlast=1,"
+            f"{wordmark_filter},format=yuv420p,setparams=range=tv[out]"
+        )
+    else:
+        final_video_filter = (
+            f"{subtitle_filter},format=yuv420p,setparams=range=tv"
+        )
     command = [
         config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(video_path), "-i", str(audio_path),
