@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 from src.config import load_config
 
 
@@ -55,14 +57,23 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.watermark.position, "bottom_right")
         self.assertEqual(
             config.watermark.logo_file,
-            root / "assets" / "branding" / "l0ki_archival_mark.png",
+            root / "assets" / "branding" / "l0ki_dossier_timeline_mark.png",
         )
         self.assertTrue(config.watermark.logo_file.is_file())
-        self.assertEqual(config.watermark.logo_size, 30)
-        self.assertEqual(config.watermark.logo_opacity, 0.68)
-        self.assertEqual(config.watermark.logo_text_gap, 6)
-        self.assertEqual(config.watermark.font_size, 25)
-        self.assertEqual(config.watermark.opacity, 0.68)
+        self.assertEqual(config.watermark.logo_size, 29)
+        self.assertEqual(config.watermark.logo_opacity, 0.72)
+        self.assertEqual(config.watermark.logo_text_gap, 5)
+        self.assertEqual(config.watermark.font_size, 24)
+        self.assertEqual(config.watermark.opacity, 0.70)
+        estimated_width = (
+            config.watermark.logo_size
+            + config.watermark.logo_text_gap
+            + round(config.watermark.font_size * 1.72)
+        )
+        self.assertLessEqual(estimated_width, round(config.video.width * 0.04))
+        with Image.open(config.watermark.logo_file) as logo:
+            self.assertEqual((logo.mode, logo.size), ("RGBA", (128, 128)))
+            self.assertEqual(logo.getchannel("A").getextrema(), (0, 255))
         self.assertEqual((config.watermark.margin_right, config.watermark.margin_bottom),
                          (20, 20))
         self.assertEqual(config.watermark.border_width, 1)
