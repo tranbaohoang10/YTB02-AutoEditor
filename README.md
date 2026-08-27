@@ -17,7 +17,7 @@ Pipeline:
 - Loudness narration mặc định giữ `-18 LUFS`, `-1.5 dBTP`, LRA `7`; source-video audio được mix làm SFX nền ở gain mặc định `-18 dB`.
 - Final mặc định 1920×1080, 30fps, H.264/yuv420p + AAC stereo 48 kHz.
 - EN và VI có dãy độc lập trong từng scope `topic + part + language`. Mỗi dãy dùng số nguyên hợp lệ lớn nhất + 1, không lấp gap/ghi đè; render dùng file `.building.mp4`, được ffprobe validate rồi mới publish atomic.
-- Logo sparkle Gemini/Flow đã biết được xóa deterministic ở tầng prepared scene bằng precise single-mark mask + local median blend feather mềm; mask phủ trọn mark chính nhưng không còn vùng phụ từng làm mất nội dung sạch, không còn paper rectangle và không crop/zoom toàn frame. `safe_edge_crop`/paper patch chỉ còn là lựa chọn explicit. Final channel bug burn đúng một lần sau subtitle/transition, chỉ gồm dossier-card/timeline icon có silhouette riêng và wordmark `l0ki`.
+- Logo sparkle Gemini/Flow đã biết được xóa deterministic ở tầng prepared scene bằng precise single-mark mask + local median blend feather mềm; mask phủ trọn mark chính nhưng không còn vùng phụ từng làm mất nội dung sạch, không còn paper rectangle và không crop/zoom toàn frame. `safe_edge_crop`/paper patch chỉ còn là lựa chọn explicit. Final channel bug burn đúng một lần sau subtitle/transition và chỉ dùng composite PNG `l0ki_archives_logo.png`; pipeline không vẽ thêm wordmark hay text phụ.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
 ## Workflow ưu tiên — motion graphics layered collage
@@ -324,7 +324,7 @@ Preset paper-documentary gồm `paper_swipe`, `paper_wipe`, `collage_push` và `
 
 Verifier decode vùng hình phía trên subtitle/watermark, dùng mean absolute frame delta với ngưỡng chống codec noise, rồi báo `static_before_ms`, `transition_motion_ms`, `settle_ms` và `static_dead_zone_ms` cho từng boundary.
 
-Các section `source_cleanup`, `visual_quality`, `transitions`, `subtitles` và `watermark` trong `config.json` giữ precise sparkle ROI/mask, fallback explicit, profile threshold, timing/gain và final style. Chỉ scene có subtitle-band density cao mới tăng outline cho current karaoke text; ASS shadow vẫn tắt và `\ko` không làm lộ fill/outline/shadow của từ tương lai trước timestamp alignment. Channel bug không có background block: dossier-card/timeline icon 29px/0.72 đặt bên trái wordmark `l0ki` Georgia Italic 24px/0.70, với outline/shadow rất nhẹ. Cụm branding rộng ước tính 75px (khoảng 3,9% khung 1920), cách mép phải và mép dưới 20px, đủ nhỏ để không cạnh tranh với nội dung hay subtitle.
+Các section `source_cleanup`, `visual_quality`, `transitions`, `subtitles` và `watermark` trong `config.json` giữ precise sparkle ROI/mask, fallback explicit, profile threshold, timing/gain và final style. Chỉ scene có subtitle-band density cao mới tăng outline cho current karaoke text; ASS shadow vẫn tắt và `\ko` không làm lộ fill/outline/shadow của từ tương lai trước timestamp alignment. Channel bug không có background block: composite PNG chính thức được scale theo chiều rộng 76px với chiều cao tự tính để giữ aspect ratio, opacity 0.64 và soft white shadow 1px/0.16 chỉ để giữ biên trên nền tối. Asset box rộng khoảng 3,96% khung 1920, cách mép phải và mép dưới 20px, không có `drawtext`, wordmark phụ hay tagline.
 
 QA watermark trước/sau toàn bộ source/prepared scene:
 

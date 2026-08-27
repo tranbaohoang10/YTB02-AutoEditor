@@ -486,44 +486,28 @@ def render_final_video(
     video = config.video
     subtitle_filter = f"ass=filename='{ffmpeg_filter_path(ass_path)}'"
     if config.watermark.enabled:
-        font = config.watermark.font.replace("\\", r"\\").replace("'", r"\'")
-        text = config.watermark.text.replace("\\", r"\\").replace("'", r"\'")
-        font_option = (
-            f"fontfile='{ffmpeg_filter_path(config.watermark.font_file)}'"
-            if config.watermark.font_file is not None else f"font='{font}'"
-        )
-        wordmark_width = round(config.watermark.font_size * 1.72)
-        mark_right_offset = (
-            config.watermark.margin_right
-            + wordmark_width
-            + config.watermark.logo_text_gap
-        )
-        mark_x = f"W-w-{mark_right_offset}"
+        mark_x = f"W-w-{config.watermark.margin_right}"
         mark_y = f"H-h-{config.watermark.margin_bottom}"
-        wordmark_filter = (
-            "drawtext="
-            f"{font_option}:text='{text}':"
-            f"fontcolor=0xEEE8DC@{config.watermark.opacity:.3f}:"
-            f"fontsize={config.watermark.font_size}:"
-            f"x=w-text_w-{config.watermark.margin_right}:"
-            f"y=h-{config.watermark.margin_bottom}-"
-            f"({config.watermark.logo_size}+text_h)/2:"
-            f"borderw={config.watermark.border_width}:"
-            f"bordercolor=black@{config.watermark.border_opacity:.3f}:"
-            f"shadowcolor=black@{config.watermark.shadow_opacity:.3f}:"
-            f"shadowx={config.watermark.shadow_x}:shadowy={config.watermark.shadow_y}"
-        )
+        shadow_x = f"{mark_x}+{config.watermark.shadow_x}"
+        shadow_y = f"{mark_y}+{config.watermark.shadow_y}"
         logo_filter = (
             f"movie=filename='{ffmpeg_filter_path(config.watermark.logo_file)}',"
-            f"scale={config.watermark.logo_size}:{config.watermark.logo_size}:"
-            "flags=lanczos,format=rgba,"
-            f"colorchannelmixer=aa={config.watermark.logo_opacity:.3f}[brandmark]"
+            f"scale={config.watermark.logo_width}:-1:flags=lanczos,format=rgba,"
+            "split=2[brandcore_src][brandshadow_src];"
+            f"[brandcore_src]colorchannelmixer=aa="
+            f"{config.watermark.logo_opacity:.3f}[brandmark];"
+            "[brandshadow_src]lutrgb=r=255:g=255:b=255,"
+            f"gblur=sigma={config.watermark.shadow_blur:.3f},"
+            f"colorchannelmixer=aa={config.watermark.shadow_opacity:.3f}"
+            "[brandshadow]"
         )
         final_video_filter = (
             f"{logo_filter};[in]{subtitle_filter}[subtitled];"
-            f"[subtitled][brandmark]overlay=x={mark_x}:y={mark_y}:"
-            "eof_action=repeat:repeatlast=1,"
-            f"{wordmark_filter},format=yuv420p,setparams=range=tv[out]"
+            f"[subtitled][brandshadow]overlay=x={shadow_x}:y={shadow_y}:"
+            "eof_action=repeat:repeatlast=1[shadowed];"
+            f"[shadowed][brandmark]overlay=x={mark_x}:y={mark_y}:"
+            "eof_action=repeat:repeatlast=1,format=yuv420p,"
+            "setparams=range=tv[out]"
         )
     else:
         final_video_filter = (
