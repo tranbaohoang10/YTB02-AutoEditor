@@ -52,31 +52,25 @@ class ConfigTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         config = load_config(root / "config.json")
         self.assertTrue(config.watermark.enabled)
-        self.assertEqual(config.watermark.text, "l0ki")
-        self.assertFalse(config.watermark.show_secondary_text)
         self.assertEqual(config.watermark.position, "bottom_right")
         self.assertEqual(
             config.watermark.logo_file,
-            root / "assets" / "branding" / "l0ki_dossier_timeline_mark.png",
+            root / "assets" / "branding" / "l0ki_archives_logo.png",
         )
         self.assertTrue(config.watermark.logo_file.is_file())
-        self.assertEqual(config.watermark.logo_size, 29)
-        self.assertEqual(config.watermark.logo_opacity, 0.72)
-        self.assertEqual(config.watermark.logo_text_gap, 5)
-        self.assertEqual(config.watermark.font_size, 24)
-        self.assertEqual(config.watermark.opacity, 0.70)
-        estimated_width = (
-            config.watermark.logo_size
-            + config.watermark.logo_text_gap
-            + round(config.watermark.font_size * 1.72)
+        self.assertEqual(config.watermark.logo_width, 76)
+        self.assertEqual(config.watermark.logo_opacity, 0.64)
+        self.assertLessEqual(
+            config.watermark.logo_width, round(config.video.width * 0.04)
         )
-        self.assertLessEqual(estimated_width, round(config.video.width * 0.04))
         with Image.open(config.watermark.logo_file) as logo:
-            self.assertEqual((logo.mode, logo.size), ("RGBA", (128, 128)))
+            self.assertEqual((logo.mode, logo.size), ("RGBA", (1254, 1254)))
             self.assertEqual(logo.getchannel("A").getextrema(), (0, 255))
         self.assertEqual((config.watermark.margin_right, config.watermark.margin_bottom),
                          (20, 20))
-        self.assertEqual(config.watermark.border_width, 1)
+        self.assertEqual((config.watermark.shadow_x, config.watermark.shadow_y), (1, 1))
+        self.assertEqual(config.watermark.shadow_opacity, 0.16)
+        self.assertEqual(config.watermark.shadow_blur, 0.45)
         self.assertTrue(config.source_cleanup.enabled)
         self.assertEqual(config.source_cleanup.strategy, "masked_median_blend")
         self.assertEqual(

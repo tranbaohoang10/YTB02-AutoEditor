@@ -312,20 +312,20 @@ class VideoBuilderTests(unittest.TestCase):
         )
         video_filter = command[command.index("-vf") + 1]
         self.assertIn("ass=filename=", video_filter)
-        self.assertIn(
-            "drawtext=fontfile='C\\:/Windows/Fonts/georgiai.ttf':text='l0ki'",
-            video_filter,
-        )
-        self.assertIn("l0ki_dossier_timeline_mark.png", video_filter)
-        self.assertIn("scale=29:29:flags=lanczos", video_filter)
-        self.assertIn("colorchannelmixer=aa=0.720", video_filter)
-        self.assertIn("overlay=x=W-w-66:y=H-h-20", video_filter)
-        self.assertIn("x=w-text_w-20", video_filter)
-        self.assertIn("borderw=1:bordercolor=black@0.420", video_filter)
-        self.assertEqual(video_filter.count("text='l0ki'"), 1)
+        self.assertIn("l0ki_archives_logo.png", video_filter)
+        self.assertEqual(video_filter.count("movie="), 1)
+        self.assertIn("scale=76:-1:flags=lanczos", video_filter)
+        self.assertIn("split=2[brandcore_src][brandshadow_src]", video_filter)
+        self.assertIn("colorchannelmixer=aa=0.640[brandmark]", video_filter)
+        self.assertIn("lutrgb=r=255:g=255:b=255", video_filter)
+        self.assertIn("gblur=sigma=0.450", video_filter)
+        self.assertIn("colorchannelmixer=aa=0.160[brandshadow]", video_filter)
+        self.assertIn("overlay=x=W-w-20+1:y=H-h-20+1", video_filter)
+        self.assertIn("overlay=x=W-w-20:y=H-h-20", video_filter)
         self.assertNotIn("Hau Nguyen", video_filter)
-        self.assertEqual(video_filter.count("drawtext="), 1)
-        self.assertLess(video_filter.index("ass="), video_filter.index("drawtext="))
+        self.assertNotIn("drawtext=", video_filter)
+        self.assertEqual(video_filter.count("overlay="), 2)
+        self.assertLess(video_filter.index("ass="), video_filter.index("overlay="))
 
     def test_final_mix_keeps_narration_primary_and_adds_source_sfx(self) -> None:
         config = load_config(ROOT / "config.json")

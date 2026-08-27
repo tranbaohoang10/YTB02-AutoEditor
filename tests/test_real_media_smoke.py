@@ -10,7 +10,7 @@ import wave
 from dataclasses import replace
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from src.config import load_config
 from src.ffmpeg_utils import probe_audio_duration, probe_duration
@@ -379,7 +379,7 @@ class RealMediaSmokeTests(unittest.TestCase):
             config, ffmpeg=ffmpeg, ffprobe=ffprobe,
             video=replace(config.video, width=320, height=180, preset="ultrafast"),
             watermark=replace(
-                config.watermark, logo_size=18, font_size=16,
+                config.watermark, logo_width=18,
                 margin_right=14, margin_bottom=12,
             ),
         )
@@ -421,23 +421,38 @@ class RealMediaSmokeTests(unittest.TestCase):
             render_final_video(
                 joined, voice, subtitle, final, config, source_sfx, transition_sfx
             )
+            baseline = root / "baseline_without_watermark.mp4"
+            render_final_video(
+                joined, voice, subtitle, baseline,
+                replace(config, watermark=replace(config.watermark, enabled=False)),
+                source_sfx, transition_sfx,
+            )
             frame = root / "during_transition.png"
+            baseline_frame = root / "during_transition_without_watermark.png"
             subprocess.run([
                 ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                 "-ss", "0.88", "-i", str(final), "-frames:v", "1", "-update", "1",
                 str(frame),
             ], check=True)
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", "0.88", "-i", str(baseline), "-frames:v", "1", "-update", "1",
+                str(baseline_frame),
+            ], check=True)
             info = _probe_streams(final, ffprobe)
-            with Image.open(frame).convert("RGB") as image:
-                crop = image.crop((230, 125, 320, 180))
-                neutral_bright = sum(
-                    max(pixel) - min(pixel) < 30 and min(pixel) > 120
-                    for pixel in crop.getdata()
+            with (
+                Image.open(frame).convert("RGB") as image,
+                Image.open(baseline_frame).convert("RGB") as baseline_image,
+            ):
+                difference = ImageChops.difference(
+                    image.crop((230, 125, 320, 180)),
+                    baseline_image.crop((230, 125, 320, 180)),
                 )
+                changed_pixels = sum(max(pixel) > 8 for pixel in difference.getdata())
         audio = next(item for item in info["streams"] if item["codec_type"] == "audio")
         self.assertEqual((audio["codec_name"], audio["sample_rate"], audio["channels"]),
                          ("aac", "48000", 2))
-        self.assertGreater(neutral_bright, 3, "l0ki watermark missing during transition")
+        self.assertGreater(changed_pixels, 25, "l0ki watermark missing during transition")
 
 
 if __name__ == "__main__":

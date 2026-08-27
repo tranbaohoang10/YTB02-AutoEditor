@@ -94,24 +94,16 @@ class AlignmentConfig:
 @dataclass(frozen=True)
 class WatermarkConfig:
     enabled: bool
-    text: str
-    show_secondary_text: bool
     position: str
     logo_file: Path
-    logo_size: int
+    logo_width: int
     logo_opacity: float
-    logo_text_gap: int
-    font: str
-    font_file: Path | None
-    font_size: int
-    opacity: float
     margin_right: int
     margin_bottom: int
     shadow_x: int
     shadow_y: int
     shadow_opacity: float
-    border_width: int
-    border_opacity: float
+    shadow_blur: float
 
 
 @dataclass(frozen=True)
@@ -227,9 +219,6 @@ def load_config(path: Path) -> AppConfig:
         if not isinstance(subtitle_bold, bool):
             raise TypeError("subtitles.bold phải là boolean")
         watermark_enabled = watermark.get("enabled", True)
-        watermark_show_secondary_text = watermark.get(
-            "show_secondary_text", False
-        )
         source_cleanup_enabled = source_cleanup.get("enabled", False)
         visual_quality_enabled = visual_quality.get("enabled", True)
         transition_pause_aware = transitions.get("pause_aware", True)
@@ -237,7 +226,6 @@ def load_config(path: Path) -> AppConfig:
         transition_sfx = transitions.get("enable_sfx", True)
         for label, value in (
             ("watermark.enabled", watermark_enabled),
-            ("watermark.show_secondary_text", watermark_show_secondary_text),
             ("source_cleanup.enabled", source_cleanup_enabled),
             ("visual_quality.enabled", visual_quality_enabled),
             ("transitions.pause_aware", transition_pause_aware),
@@ -250,7 +238,7 @@ def load_config(path: Path) -> AppConfig:
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
         watermark_logo_file = Path(str(watermark.get(
-            "logo_file", "assets/branding/l0ki_dossier_timeline_mark.png"
+            "logo_file", "assets/branding/l0ki_archives_logo.png"
         )))
         if not watermark_logo_file.is_absolute():
             watermark_logo_file = (path.parent / watermark_logo_file).resolve()
@@ -392,27 +380,16 @@ def load_config(path: Path) -> AppConfig:
             ),
             watermark=WatermarkConfig(
                 enabled=watermark_enabled,
-                text=str(watermark.get("text", "l0ki")),
-                show_secondary_text=watermark_show_secondary_text,
                 position=str(watermark.get("position", "bottom_right")),
                 logo_file=watermark_logo_file,
-                logo_size=int(watermark.get("logo_size", 29)),
-                logo_opacity=float(watermark.get("logo_opacity", 0.72)),
-                logo_text_gap=int(watermark.get("logo_text_gap", 5)),
-                font=str(watermark.get("font", "Georgia Italic")),
-                font_file=(
-                    Path(str(watermark["font_file"]))
-                    if watermark.get("font_file") else None
-                ),
-                font_size=int(watermark.get("font_size", 25)),
-                opacity=float(watermark.get("opacity", 0.68)),
+                logo_width=int(watermark.get("logo_width", 76)),
+                logo_opacity=float(watermark.get("logo_opacity", 0.64)),
                 margin_right=int(watermark.get("margin_right", 20)),
                 margin_bottom=int(watermark.get("margin_bottom", 20)),
                 shadow_x=int(watermark.get("shadow_x", 1)),
                 shadow_y=int(watermark.get("shadow_y", 1)),
-                shadow_opacity=float(watermark.get("shadow_opacity", 0.22)),
-                border_width=int(watermark.get("border_width", 1)),
-                border_opacity=float(watermark.get("border_opacity", 0.42)),
+                shadow_opacity=float(watermark.get("shadow_opacity", 0.16)),
+                shadow_blur=float(watermark.get("shadow_blur", 0.45)),
             ),
             transitions=TransitionConfig(
                 pause_aware=transition_pause_aware,
@@ -587,34 +564,26 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("hierarchy_vignette_angle phải trong 0.1..1.2.")
     if not 0.0 <= quality.subtitle_density_threshold <= 1.0:
         raise AutoEditorError("subtitle_density_threshold phải trong 0..1.")
-    if result.watermark.text != "l0ki":
-        raise AutoEditorError("watermark.text phải đúng chính xác là 'l0ki'.")
-    if result.watermark.show_secondary_text:
-        raise AutoEditorError("watermark.show_secondary_text phải là false.")
     if result.watermark.position != "bottom_right":
         raise AutoEditorError("watermark.position hiện chỉ hỗ trợ 'bottom_right'.")
     if not result.watermark.logo_file.is_file():
         raise AutoEditorError(
             f"Không tìm thấy watermark.logo_file: {result.watermark.logo_file}"
         )
-    if not 12 <= result.watermark.logo_size <= 96:
-        raise AutoEditorError("watermark.logo_size phải trong khoảng 12..96.")
-    if not 0.0 < result.watermark.logo_opacity <= 1.0:
-        raise AutoEditorError("watermark.logo_opacity phải trong khoảng (0, 1].")
-    if not 0 <= result.watermark.logo_text_gap <= 30:
-        raise AutoEditorError("watermark.logo_text_gap phải trong khoảng 0..30.")
-    if not 8 <= result.watermark.font_size <= 120:
-        raise AutoEditorError("watermark.font_size phải trong khoảng 8..120.")
-    if not 0.0 < result.watermark.opacity <= 1.0:
-        raise AutoEditorError("watermark.opacity phải trong khoảng (0, 1].")
+    if not 12 <= result.watermark.logo_width <= 256:
+        raise AutoEditorError("watermark.logo_width phải trong khoảng 12..256.")
+    if not 0.55 <= result.watermark.logo_opacity <= 0.70:
+        raise AutoEditorError("watermark.logo_opacity phải trong khoảng 0.55..0.70.")
     if min(result.watermark.margin_right, result.watermark.margin_bottom) < 0:
         raise AutoEditorError("Watermark margins không được âm.")
-    if not 0 <= result.watermark.border_width <= 10:
-        raise AutoEditorError("watermark.border_width phải trong khoảng 0..10.")
-    if not 0.0 <= result.watermark.border_opacity <= 1.0:
-        raise AutoEditorError("watermark.border_opacity phải trong khoảng 0..1.")
-    if not 0.0 <= result.watermark.shadow_opacity <= 1.0:
-        raise AutoEditorError("watermark.shadow_opacity phải trong khoảng 0..1.")
+    if not -4 <= result.watermark.shadow_x <= 4:
+        raise AutoEditorError("watermark.shadow_x phải trong khoảng -4..4.")
+    if not -4 <= result.watermark.shadow_y <= 4:
+        raise AutoEditorError("watermark.shadow_y phải trong khoảng -4..4.")
+    if not 0.0 <= result.watermark.shadow_opacity <= 0.40:
+        raise AutoEditorError("watermark.shadow_opacity phải trong khoảng 0..0.40.")
+    if not 0.0 <= result.watermark.shadow_blur <= 3.0:
+        raise AutoEditorError("watermark.shadow_blur phải trong khoảng 0..3.")
     if result.transitions.style != "paper_documentary":
         raise AutoEditorError("transitions.style hiện chỉ hỗ trợ 'paper_documentary'.")
     pause_thresholds = (
