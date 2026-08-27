@@ -250,7 +250,7 @@ def load_config(path: Path) -> AppConfig:
         if not kokoro_python.is_absolute():
             kokoro_python = (path.parent / kokoro_python).resolve()
         watermark_logo_file = Path(str(watermark.get(
-            "logo_file", "assets/branding/l0ki_archival_mark.png"
+            "logo_file", "assets/branding/l0ki_dossier_timeline_mark.png"
         )))
         if not watermark_logo_file.is_absolute():
             watermark_logo_file = (path.parent / watermark_logo_file).resolve()
@@ -396,9 +396,9 @@ def load_config(path: Path) -> AppConfig:
                 show_secondary_text=watermark_show_secondary_text,
                 position=str(watermark.get("position", "bottom_right")),
                 logo_file=watermark_logo_file,
-                logo_size=int(watermark.get("logo_size", 30)),
-                logo_opacity=float(watermark.get("logo_opacity", 0.68)),
-                logo_text_gap=int(watermark.get("logo_text_gap", 6)),
+                logo_size=int(watermark.get("logo_size", 29)),
+                logo_opacity=float(watermark.get("logo_opacity", 0.72)),
+                logo_text_gap=int(watermark.get("logo_text_gap", 5)),
                 font=str(watermark.get("font", "Georgia Italic")),
                 font_file=(
                     Path(str(watermark["font_file"]))

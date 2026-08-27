@@ -316,10 +316,10 @@ class VideoBuilderTests(unittest.TestCase):
             "drawtext=fontfile='C\\:/Windows/Fonts/georgiai.ttf':text='l0ki'",
             video_filter,
         )
-        self.assertIn("l0ki_archival_mark.png", video_filter)
-        self.assertIn("scale=30:30:flags=lanczos", video_filter)
-        self.assertIn("colorchannelmixer=aa=0.680", video_filter)
-        self.assertIn("overlay=x=W-w-69:y=H-h-20", video_filter)
+        self.assertIn("l0ki_dossier_timeline_mark.png", video_filter)
+        self.assertIn("scale=29:29:flags=lanczos", video_filter)
+        self.assertIn("colorchannelmixer=aa=0.720", video_filter)
+        self.assertIn("overlay=x=W-w-66:y=H-h-20", video_filter)
         self.assertIn("x=w-text_w-20", video_filter)
         self.assertIn("borderw=1:bordercolor=black@0.420", video_filter)
         self.assertEqual(video_filter.count("text='l0ki'"), 1)
