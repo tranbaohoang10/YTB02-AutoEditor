@@ -1,0 +1,6 @@
+{
+  "topic": "Black Wednesday",
+  "expected_parts": 3,
+  "production_language": "en",
+  "experimental_languages": ["vi"]
+}
