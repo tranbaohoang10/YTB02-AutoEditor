@@ -27,10 +27,21 @@ class LanguageWorkflowTests(unittest.TestCase):
     def test_entrypoints_map_to_their_permanent_scripts(self) -> None:
         en = (ROOT / "RUN_EN.bat").read_text(encoding="utf-8")
         vi = (ROOT / "RUN_VI.bat").read_text(encoding="utf-8")
+        final_en = (ROOT / "BUILD_FINAL_EN.bat").read_text(encoding="utf-8")
         self.assertIn("--script input\\script.en.json --build", en)
         self.assertIn("--script input\\script.vi.json --build", vi)
         self.assertNotIn("script.vi.json", en)
         self.assertNotIn("script.en.json", vi)
+        self.assertIn("-m src.final_assembler", final_en)
+        self.assertIn("--language en", final_en)
+        self.assertNotIn("--language vi", final_en)
+
+    def test_topic_manifest_makes_english_the_production_default(self) -> None:
+        topic = json.loads((ROOT / "input/topic.json").read_text(encoding="utf-8"))
+        self.assertEqual(topic["production_language"], "en")
+        self.assertEqual(topic["experimental_languages"], ["vi"])
+        self.assertEqual((topic["topic"], topic["expected_parts"]),
+                         ("Black Wednesday", 3))
 
     def test_output_numbering_is_independent_max_plus_one(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

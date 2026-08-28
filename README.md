@@ -20,6 +20,52 @@ Pipeline:
 - Logo sparkle Gemini/Flow đã biết được xóa deterministic ở tầng prepared scene bằng precise single-mark mask + local median blend feather mềm; mask phủ trọn mark chính nhưng không còn vùng phụ từng làm mất nội dung sạch, không còn paper rectangle và không crop/zoom toàn frame. `safe_edge_crop`/paper patch chỉ còn là lựa chọn explicit. Final channel bug burn đúng một lần sau subtitle/transition và chỉ dùng composite PNG `l0ki_archives_logo.png`; pipeline không vẽ thêm wordmark hay text phụ.
 - Project không sửa hoặc cài dependency vào `H:\KokoroCPU`.
 
+## ENGLISH PRODUCTION WORKFLOW
+
+English là production target chính thức và là luồng bắt buộc hiện tại. Vietnamese vẫn được giữ để nâng cấp trong tương lai, nhưng đang ở trạng thái **EXPERIMENTAL** và không chặn build FINAL tiếng Anh.
+
+Quy trình sản xuất một topic nhiều Part:
+
+1. Chuẩn bị metadata/script và visual cho Part 01, đặt đúng `topic`, `part` và `language: "en"` trong `input/script.en.json`.
+2. Chạy `RUN_EN.bat` để render Part 01.
+3. Lặp lại bước trên cho Part 02, Part 03 và mọi Part được yêu cầu.
+4. Khai báo topic một lần trong `input/topic.json`:
+
+```json
+{
+  "topic": "Black Wednesday",
+  "expected_parts": 3,
+  "production_language": "en",
+  "experimental_languages": ["vi"]
+}
+```
+
+5. Chạy lệnh production chính:
+
+```bat
+BUILD_FINAL_EN.bat
+```
+
+Assembler tìm độc lập version số hợp lệ lớn nhất trong từng thư mục `Part_<NN>/EN`; timestamp filesystem không tham gia lựa chọn. Nó yêu cầu đủ mọi Part theo thứ tự số, kiểm tra metadata cạnh MP4 khi có, rồi dùng ffprobe xác nhận H.264 1920×1080 30fps yuv420p + AAC stereo 48 kHz. Nếu một Part thiếu hoặc media lệch contract, build dừng rõ ràng và không normalize/re-encode ngầm.
+
+Các Part tương thích được ghép tuần tự bằng FFmpeg concat demuxer với `-c copy`. Kết quả và manifest truy vết source nằm riêng:
+
+```text
+output/
+  Black_Wednesday_FINAL/
+    EN/
+      Black_Wednesday_FINAL_EN_1.mp4
+      Black_Wednesday_FINAL_EN_1.json
+```
+
+Mỗi lần build dùng `max(valid FINAL version) + 1`, không lấp gap và không overwrite. Có thể kiểm tra toàn bộ source/metadata/media contract và planned output mà không tạo FINAL:
+
+```bat
+BUILD_FINAL_EN.bat --dry-run
+```
+
+`RUN_VI.bat` vẫn được giữ nguyên. Có thể gọi assembler Python với `--language vi` cho fixture hoặc thử nghiệm thủ công; console và manifest đánh dấu đây là pipeline experimental. Chất lượng Vietnamese TTS không thuộc production gate hiện tại.
+
 ## Workflow ưu tiên — motion graphics layered collage
 
 Đây là mode phù hợp với video documentary paper-collage: một scene được dựng từ background và nhiều ảnh rời có alpha. Từng item xuất hiện theo timeline, giữ nguyên sau entrance, rồi camera có thể drift/push rất nhẹ. Renderer local, deterministic và không generatively sửa nội dung.
