@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from .config import AppConfig, SourceCleanupConfig
 from .models import AutoEditorError
+from .source_cleanup import flow_watermark_support_image
 
 
 @dataclass(frozen=True)
@@ -143,27 +144,8 @@ def ensure_paper_corner_patch(
 def _draw_flow_gemini_mask(
     width: int, height: int, feather_px: int,
 ) -> Image.Image:
-    """Create the precise single-sparkle mask used by the current Flow clips.
-
-    Coordinates are normalized inside the configured cleanup rectangle so the
-    patch remains deterministic if output resolution changes.  Only the fixed
-    screen-space Flow mark is covered; sparkle-like collage details elsewhere
-    in the ROI are deliberately preserved.
-    """
-    image = Image.new("L", (width, height), 0)
-    draw = ImageDraw.Draw(image)
-
-    def point(x: float, y: float) -> tuple[int, int]:
-        return round(x * width), round(y * height)
-
-    mark = tuple(point(x, y) for x, y in (
-        (0.30, 0.10), (0.365, 0.28), (0.525, 0.375), (0.365, 0.47),
-        (0.30, 0.66), (0.235, 0.47), (0.075, 0.375), (0.235, 0.28),
-    ))
-    draw.polygon(mark, fill=255)
-    if feather_px:
-        image = image.filter(ImageFilter.GaussianBlur(feather_px))
-    return image
+    """Create the measured max Flow-mark envelope plus local safety margin."""
+    return flow_watermark_support_image(width, height, feather_px)
 
 
 def ensure_flow_gemini_mask(
@@ -171,7 +153,7 @@ def ensure_flow_gemini_mask(
 ) -> Path:
     _, _, patch_width, patch_height = source_cleanup_geometry(width, height, config)
     destination = directory / (
-        f"flow_gemini_mask_v5_{patch_width}x{patch_height}_f{config.feather_px}.png"
+        f"flow_gemini_mask_v6_{patch_width}x{patch_height}_f{config.feather_px}.png"
     )
     if destination.is_file() and destination.stat().st_size > 0:
         return destination
@@ -341,7 +323,10 @@ def write_visual_profile_diagnostics(
             affected_ratio = 1.0 - (
                 crop_width * crop_height / (config.video.width * config.video.height)
             )
-        elif cleanup.strategy in {"masked_median_blend", "median_texture_patch"}:
+        elif cleanup.strategy in {
+            "frequency_selective_reconstruct", "masked_median_blend",
+            "median_texture_patch",
+        }:
             patch_x, patch_y, patch_width, patch_height = source_cleanup_geometry(
                 config.video.width, config.video.height, cleanup
             )

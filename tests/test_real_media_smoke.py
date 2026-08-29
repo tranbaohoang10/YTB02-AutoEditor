@@ -10,6 +10,7 @@ import wave
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageChops
 
 from src.config import load_config
@@ -18,13 +19,14 @@ from src.image_motion import prepare_image_scene
 from src.layered_composer import render_layered_scene
 from src.layered_manifest import SceneTransition, load_layered_manifest
 from src.media_qc import probe_video
+from src.source_cleanup import flow_watermark_alpha
 from src.video_builder import (
     SourceAudioClip, build_source_audio_mix, concat_audio_scenes,
     concat_video_scenes_with_transitions, render_final_video,
     prepare_video_scene, trim_narration_padding,
 )
 from src.visual_quality import (
-    SceneVisualProfile, ensure_flow_gemini_mask, source_cleanup_geometry,
+    SceneVisualProfile, source_cleanup_geometry,
 )
 
 
@@ -84,15 +86,19 @@ class RealMediaSmokeTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            still = Image.new("RGB", (320, 180), (198, 187, 165))
-            mask_path = ensure_flow_gemini_mask(
-                root, 320, 180, config.source_cleanup
-            )
             x, y, width, height = source_cleanup_geometry(
                 320, 180, config.source_cleanup
             )
-            with Image.open(mask_path).convert("L") as mask:
-                still.paste(Image.new("RGB", (width, height), "white"), (x, y), mask)
+            yy, xx = np.indices((180, 320), dtype=np.float32)
+            paper = 187.0 + 12.0 * np.sin(xx * 0.31) + 8.0 * np.cos(yy * 0.27)
+            background = np.stack((paper + 11.0, paper, paper - 13.0), axis=2)
+            marked = background.copy()
+            alpha = np.clip(flow_watermark_alpha(width, height) * 1.3, 0.0, 0.66)
+            roi = marked[y:y + height, x:x + width]
+            marked[y:y + height, x:x + width] = (
+                roi * (1.0 - alpha[:, :, None]) + 248.0 * alpha[:, :, None]
+            )
+            still = Image.fromarray(np.clip(marked, 0, 255).astype(np.uint8))
             source_png = root / "flow_source.png"
             still.save(source_png)
             source = root / "flow_source.mp4"
@@ -114,7 +120,11 @@ class RealMediaSmokeTests(unittest.TestCase):
             with Image.open(frame).convert("RGB") as image:
                 patch = image.crop((x, y, x + width, y + height))
                 bright_after = sum(min(pixel) > 235 for pixel in patch.getdata())
+                cleaned_variance = float(np.var(np.asarray(patch, dtype=np.float32)))
+            media = probe_video(cleaned, ffprobe)
         self.assertLess(bright_after, width * height * 0.03)
+        self.assertGreater(cleaned_variance, 20.0)
+        self.assertEqual((media["width"], media["height"]), (320, 180))
 
     def test_two_scene_zero_gap_trims_only_edge_padding(self) -> None:
         ffmpeg = shutil.which("ffmpeg")

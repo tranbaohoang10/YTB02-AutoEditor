@@ -87,7 +87,7 @@
   },
   "source_cleanup": {
     "enabled": true,
-    "strategy": "masked_median_blend",
+    "strategy": "frequency_selective_reconstruct",
     "target": "gemini_flow_sparkle",
     "x_ratio": 0.875,
     "y_ratio": 0.764,

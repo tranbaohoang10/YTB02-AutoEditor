@@ -15,6 +15,7 @@ from .ffmpeg_utils import ffmpeg_filter_path, run_media_command, write_concat_fi
 from .layered_manifest import SceneTransition
 from .models import AutoEditorError
 from .narration import PauseCompressionReport, compress_smart_pauses
+from .source_cleanup import run_frequency_cleanup_pipeline
 from .visual_quality import (
     SceneVisualProfile, ensure_flow_gemini_mask, ensure_paper_corner_patch,
     source_cleanup_geometry, source_edge_crop_geometry, source_paper_patch_geometry,
@@ -194,32 +195,47 @@ def prepare_video_scene(
     visual_profile: SceneVisualProfile | None = None,
 ) -> None:
     video = config.video
-    command = [
-        config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(source),
-    ]
     cleanup_source = bool(
         visual_profile is not None
         and visual_profile.asset_kind == "video"
         and visual_profile.cleanup_required
         and config.source_cleanup.enabled
     )
+    frequency_cleanup = bool(
+        cleanup_source
+        and config.source_cleanup.strategy == "frequency_selective_reconstruct"
+    )
+    command = [config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+    if frequency_cleanup:
+        command.extend([
+            "-f", "rawvideo", "-pixel_format", "bgr24",
+            "-video_size", f"{video.width}x{video.height}",
+            "-framerate", str(video.fps), "-i", "pipe:0",
+        ])
+    else:
+        command.extend(["-i", str(source)])
     base_filters: list[str] = []
     if cleanup_source and config.source_cleanup.strategy == "safe_edge_crop":
         crop_width, crop_height = source_edge_crop_geometry(
             video.width, video.height, config.source_cleanup
         )
         base_filters.append(f"crop={crop_width}:{crop_height}:0:0")
-    base_filters.extend([
-        f"scale={video.width}:{video.height}:force_original_aspect_ratio=decrease",
-        f"pad={video.width}:{video.height}:(ow-iw)/2:(oh-ih)/2:color=black",
-        f"fps={video.fps}",
-        "setsar=1",
-    ])
+    if frequency_cleanup:
+        base_filters.append("setsar=1")
+    else:
+        base_filters.extend([
+            f"scale={video.width}:{video.height}:force_original_aspect_ratio=decrease",
+            f"pad={video.width}:{video.height}:(ow-iw)/2:(oh-ih)/2:color=black",
+            f"fps={video.fps}",
+            "setsar=1",
+        ])
     base = ",".join(base_filters)
     graph_parts: list[str] = []
     prepared_label = "preparedbase"
-    if cleanup_source and config.source_cleanup.strategy == "paper_corner_patch":
+    if frequency_cleanup:
+        graph_parts.append(f"[0:v]{base}[normalized]")
+        source_label = "normalized"
+    elif cleanup_source and config.source_cleanup.strategy == "paper_corner_patch":
         patch = ensure_paper_corner_patch(
             destination.parent, video.width, video.height, config.source_cleanup
         )
@@ -355,7 +371,19 @@ def prepare_video_scene(
         "-color_primaries", "bt709", "-color_trc", "bt709", "-r", str(video.fps),
         "-video_track_timescale", "90000", str(destination),
     ])
-    run_media_command(command, f"chuẩn bị clip {source.name}")
+    if frequency_cleanup:
+        geometry = source_cleanup_geometry(
+            video.width, video.height, config.source_cleanup
+        )
+        run_frequency_cleanup_pipeline(
+            config.ffmpeg, source, command,
+            width=video.width, height=video.height, fps=video.fps,
+            decode_duration=min(duration, source_duration or duration),
+            geometry=geometry,
+            diagnostics_path=destination.with_suffix(".cleanup.json"),
+        )
+    else:
+        run_media_command(command, f"chuẩn bị clip {source.name}")
 
 
 def concat_video_scenes(
