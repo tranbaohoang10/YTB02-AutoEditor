@@ -83,8 +83,9 @@ class RealMediaSmokeTests(unittest.TestCase):
             config, ffmpeg=ffmpeg, ffprobe=ffprobe,
             video=replace(config.video, width=320, height=180, preset="ultrafast"),
             source_cleanup=replace(
-                config.source_cleanup, cover_logo_width=37,
-                cover_margin_right=3, cover_margin_bottom=3,
+                config.source_cleanup, cover_logo_width=18,
+                cover_margin_right=2, cover_margin_bottom=2,
+                cover_nudge_left=19, cover_nudge_up=19,
             ),
         )
         profile = SceneVisualProfile(
@@ -132,10 +133,10 @@ class RealMediaSmokeTests(unittest.TestCase):
                 "-update", "1", str(frame),
             ], check=True)
             with Image.open(frame).convert("RGB") as image:
-                badge = np.asarray(image.crop((280, 140, 317, 177)), dtype=np.float32)
+                badge = np.asarray(image.crop((280, 140, 300, 160)), dtype=np.float32)
                 subtitle_pixels = np.asarray(image.crop((80, 125, 240, 175)))
         self.assertEqual((info["width"], info["height"]), (320, 180))
-        self.assertGreater(float(np.std(badge)), 10.0)
+        self.assertGreater(float(np.std(badge)), 2.0)
         self.assertGreater(int(np.count_nonzero(subtitle_pixels.max(axis=2) > 220)), 20)
 
     def test_real_cleanup_cache_miss_hit_skips_reconstruction_and_matches_uncached(self) -> None:
@@ -298,8 +299,9 @@ class RealMediaSmokeTests(unittest.TestCase):
             config, ffmpeg=ffmpeg, ffprobe=ffprobe,
             video=replace(config.video, width=320, height=180, preset="ultrafast"),
             source_cleanup=replace(
-                config.source_cleanup, cover_logo_width=37,
-                cover_margin_right=3, cover_margin_bottom=3,
+                config.source_cleanup, cover_logo_width=18,
+                cover_margin_right=2, cover_margin_bottom=2,
+                cover_nudge_left=19, cover_nudge_up=19,
             ),
         )
         with tempfile.TemporaryDirectory() as directory:
