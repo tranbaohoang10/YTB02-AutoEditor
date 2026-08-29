@@ -526,7 +526,34 @@ def render_final_video(
 ) -> None:
     video = config.video
     subtitle_filter = f"ass=filename='{ffmpeg_filter_path(ass_path)}'"
-    if config.watermark.enabled:
+    cover_with_official_logo = bool(
+        config.source_cleanup.enabled
+        and config.source_cleanup.strategy == "cover_with_official_logo"
+    )
+    if config.watermark.enabled and cover_with_official_logo:
+        cover = config.source_cleanup
+        size = cover.cover_logo_width
+        circle_alpha = (
+            "if(lte(hypot(X-W/2\\,Y-H/2)\\,W/2-2)\\,255\\,0)"
+        )
+        badge_filter = (
+            f"nullsrc=s={size}x{size},format=rgba,"
+            f"geq=r=232:g=225:b=211:a='{circle_alpha}'[coverplate];"
+            f"movie=filename='{ffmpeg_filter_path(config.watermark.logo_file)}',"
+            f"scale={size}:{size}:force_original_aspect_ratio=decrease:"
+            "flags=lanczos,format=rgba[officiallogo];"
+            "[coverplate][officiallogo]overlay=x=(W-w)/2:y=(H-h)/2:"
+            "shortest=1[coverbadge]"
+        )
+        final_video_filter = (
+            f"{badge_filter};[in][coverbadge]overlay="
+            f"x=W-w-{cover.cover_margin_right}:"
+            f"y=H-h-{cover.cover_margin_bottom}:"
+            "eof_action=repeat:repeatlast=1[covered];"
+            f"[covered]{subtitle_filter},format=yuv420p,"
+            "setparams=range=tv[out]"
+        )
+    elif config.watermark.enabled:
         mark_x = f"W-w-{config.watermark.margin_right}"
         mark_y = f"H-h-{config.watermark.margin_bottom}"
         shadow_x = f"{mark_x}+{config.watermark.shadow_x}"

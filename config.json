@@ -87,7 +87,7 @@
   },
   "source_cleanup": {
     "enabled": true,
-    "strategy": "frequency_selective_reconstruct",
+    "strategy": "cover_with_official_logo",
     "target": "gemini_flow_sparkle",
     "x_ratio": 0.875,
     "y_ratio": 0.764,
@@ -97,7 +97,10 @@
     "feather_px": 3,
     "paper_margin_px": 14,
     "crop_width_ratio": 0.885416667,
-    "crop_height_ratio": 0.885185185
+    "crop_height_ratio": 0.885185185,
+    "cover_logo_width": 224,
+    "cover_margin_right": 20,
+    "cover_margin_bottom": 20
   },
   "visual_quality": {
     "enabled": true,

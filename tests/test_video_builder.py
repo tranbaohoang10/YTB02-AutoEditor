@@ -6,14 +6,17 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 from src.config import load_config
 from src.layered_manifest import SceneTransition
+from src.source_cleanup import flow_watermark_support_image
 from src.video_builder import (
     SourceAudioClip, build_source_audio_mix, concat_audio_scenes,
     concat_video_scenes_with_transitions, prepare_video_scene, render_final_video,
     trim_narration_padding,
 )
-from src.visual_quality import SceneVisualProfile
+from src.visual_quality import SceneVisualProfile, source_cleanup_geometry
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,6 +252,12 @@ class VideoBuilderTests(unittest.TestCase):
 
     def test_default_cleanup_streams_local_frequency_reconstruction_before_quality(self) -> None:
         config = load_config(ROOT / "config.json")
+        config = replace(
+            config,
+            source_cleanup=replace(
+                config.source_cleanup, strategy="frequency_selective_reconstruct"
+            ),
+        )
         profile = SceneVisualProfile(
             3, "video", 0.08, 0.01, 0.08, "high", "low", True,
         )
@@ -276,6 +285,12 @@ class VideoBuilderTests(unittest.TestCase):
 
     def test_cleanup_motion_keeps_bottom_right_roi_anchored(self) -> None:
         config = load_config(ROOT / "config.json")
+        config = replace(
+            config,
+            source_cleanup=replace(
+                config.source_cleanup, strategy="frequency_selective_reconstruct"
+            ),
+        )
         profile = SceneVisualProfile(
             3, "video", 0.08, 0.01, 0.08, "high", "low", True,
         )
@@ -294,8 +309,83 @@ class VideoBuilderTests(unittest.TestCase):
             2,
         )
 
+    def test_fast_cover_skips_reconstruction_and_does_not_crop_or_zoom(self) -> None:
+        config = load_config(ROOT / "config.json")
+        profile = SceneVisualProfile(
+            3, "video", 0.08, 0.01, 0.08, "normal", "normal", True,
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_frequency_cleanup_pipeline"
+        ) as reconstruct, patch("src.video_builder.run_media_command") as run:
+            root = Path(directory)
+            prepare_video_scene(
+                root / "scene_03.mp4", root / "out.mp4", 3.0, config,
+                source_duration=4.0, visual_profile=profile,
+                cleanup_cache_dir=root / "cache",
+            )
+        reconstruct.assert_not_called()
+        command = run.call_args.args[0]
+        graph = command[command.index("-filter_complex") + 1]
+        self.assertEqual(command.count("-i"), 1)
+        self.assertNotIn("pipe:0", command)
+        self.assertNotIn("crop=", graph)
+        self.assertNotIn("zoompan=", graph)
+        self.assertNotIn("overlay=", graph)
+        self.assertFalse((root / "cache").exists())
+
+    def test_fast_cover_uses_one_official_logo_before_subtitles(self) -> None:
+        config = load_config(ROOT / "config.json")
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "src.video_builder.run_media_command"
+        ) as run:
+            root = Path(directory)
+            render_final_video(
+                root / "video.mp4", root / "voice.wav", root / "subtitle.ass",
+                root / "final.mp4", config,
+            )
+        command = run.call_args.args[0]
+        video_filter = command[command.index("-vf") + 1]
+        self.assertEqual(video_filter.count("movie="), 1)
+        self.assertEqual(video_filter.count("l0ki_archives_logo.png"), 1)
+        self.assertIn("nullsrc=s=224x224", video_filter)
+        self.assertIn("scale=224:224:force_original_aspect_ratio=decrease", video_filter)
+        self.assertIn("overlay=x=W-w-20:y=H-h-20", video_filter)
+        self.assertLess(video_filter.index("[in][coverbadge]overlay="),
+                        video_filter.index("ass=filename="))
+        self.assertNotIn("brandmark", video_filter)
+        self.assertNotIn("brandshadow", video_filter)
+        self.assertNotIn("drawtext=", video_filter)
+        self.assertNotIn("Hau Nguyen", video_filter)
+
+    def test_fast_cover_circle_contains_complete_measured_gemini_envelope(self) -> None:
+        config = load_config(ROOT / "config.json")
+        cleanup = config.source_cleanup
+        x, y, width, height = source_cleanup_geometry(
+            config.video.width, config.video.height, cleanup,
+        )
+        support = np.asarray(flow_watermark_support_image(width, height, 0)) > 0
+        support_y, support_x = np.where(support)
+        support_x += x
+        support_y += y
+        size = cleanup.cover_logo_width
+        left = config.video.width - size - cleanup.cover_margin_right
+        top = config.video.height - size - cleanup.cover_margin_bottom
+        center_x = left + (size - 1) / 2
+        center_y = top + (size - 1) / 2
+        radius = size / 2 - 2
+        self.assertTrue(np.all(
+            (support_x - center_x) ** 2 + (support_y - center_y) ** 2
+            <= radius ** 2
+        ))
+
     def test_final_encode_signals_limited_bt709_contract(self) -> None:
         config = load_config(ROOT / "config.json")
+        config = replace(
+            config,
+            source_cleanup=replace(
+                config.source_cleanup, strategy="frequency_selective_reconstruct"
+            ),
+        )
         with tempfile.TemporaryDirectory() as directory, patch(
             "src.video_builder.run_media_command"
         ) as run:
