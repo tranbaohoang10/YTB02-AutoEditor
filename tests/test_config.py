@@ -73,7 +73,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.watermark.shadow_blur, 0.45)
         self.assertTrue(config.source_cleanup.enabled)
         self.assertEqual(
-            config.source_cleanup.strategy, "frequency_selective_reconstruct"
+            config.source_cleanup.strategy, "cover_with_official_logo"
+        )
+        self.assertEqual(config.source_cleanup.cover_logo_width, 224)
+        self.assertEqual(
+            (config.source_cleanup.cover_margin_right,
+             config.source_cleanup.cover_margin_bottom),
+            (20, 20),
         )
         self.assertEqual(
             (config.source_cleanup.median_radius, config.source_cleanup.feather_px),
@@ -88,6 +94,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.transitions.preferred_trigger_ms, 300)
         self.assertEqual(config.transitions.max_transition_ms, 350)
         self.assertEqual(config.transitions.sfx_gain_db, -21.5)
+
+    def test_official_branding_directory_contains_no_generated_logo(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        branding = root / "assets" / "branding"
+        self.assertEqual(
+            sorted(path.name for path in branding.glob("*.png")),
+            ["l0ki_archives_logo.png"],
+        )
 
 
 if __name__ == "__main__":

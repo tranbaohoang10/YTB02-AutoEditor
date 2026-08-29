@@ -174,6 +174,16 @@ def _prepare_scenes(
         print(f"       Scene {entry.scene.id:02d} {asset.kind} -> {target_duration:.2f} sec")
         if asset.kind == "video":
             profile = (visual_profiles or {}).get(entry.scene.id)
+            if (
+                profile is not None
+                and profile.cleanup_required
+                and config.source_cleanup.enabled
+                and config.source_cleanup.strategy == "cover_with_official_logo"
+            ):
+                print(
+                    f"       Scene {entry.scene.id:02d} | cleanup fast cover "
+                    "(official logo at final composition)"
+                )
             def cleanup_progress(status: str, scene_id: int = entry.scene.id) -> None:
                 if status in {"HIT", "MISS"}:
                     print(f"       Scene {scene_id:02d} | cleanup cache {status}")

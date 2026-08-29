@@ -73,6 +73,71 @@ def _probe_streams(path: Path, ffprobe: str) -> dict:
 
 @unittest.skipUnless(os.environ.get("YTB_RUN_REAL_MEDIA") == "1", "real FFmpeg smoke is opt-in")
 class RealMediaSmokeTests(unittest.TestCase):
+    def test_real_fast_cover_renders_one_official_logo_and_preserves_dimensions(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe")
+        self.assertIsNotNone(ffmpeg)
+        self.assertIsNotNone(ffprobe)
+        config = load_config(ROOT / "config.json")
+        config = replace(
+            config, ffmpeg=ffmpeg, ffprobe=ffprobe,
+            video=replace(config.video, width=320, height=180, preset="ultrafast"),
+            source_cleanup=replace(
+                config.source_cleanup, cover_logo_width=37,
+                cover_margin_right=3, cover_margin_bottom=3,
+            ),
+        )
+        profile = SceneVisualProfile(
+            1, "video", 0.02, 0.0, 0.1, "normal", "normal", True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.mp4"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=0.5",
+                "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", str(source),
+            ], check=True)
+            prepared = root / "prepared.mp4"
+            with patch("src.video_builder.run_frequency_cleanup_pipeline") as cleanup:
+                prepare_video_scene(
+                    source, prepared, 0.5, config, source_duration=0.5,
+                    visual_profile=profile, cleanup_cache_dir=root / "cache",
+                )
+            cleanup.assert_not_called()
+            voice = root / "voice.wav"
+            _write_sine_wav(voice, 24_000, [(0.5, 0.2)])
+            subtitle = root / "subtitle.ass"
+            subtitle.write_text(
+                "[Script Info]\nScriptType: v4.00+\nPlayResX: 320\nPlayResY: 180\n"
+                "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, "
+                "SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, "
+                "StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+                "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+                "Style: Default,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+                "&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1\n"
+                "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, "
+                "MarginV, Effect, Text\n"
+                "Dialogue: 0,0:00:00.00,0:00:00.50,Default,,0,0,0,,SUBTITLE\n",
+                encoding="utf-8",
+            )
+            final = root / "final.mp4"
+            render_final_video(prepared, voice, subtitle, final, config)
+            info = probe_video(final, ffprobe)
+            frame = root / "frame.png"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", "0.25", "-i", str(final), "-frames:v", "1",
+                "-update", "1", str(frame),
+            ], check=True)
+            with Image.open(frame).convert("RGB") as image:
+                badge = np.asarray(image.crop((280, 140, 317, 177)), dtype=np.float32)
+                subtitle_pixels = np.asarray(image.crop((80, 125, 240, 175)))
+        self.assertEqual((info["width"], info["height"]), (320, 180))
+        self.assertGreater(float(np.std(badge)), 10.0)
+        self.assertGreater(int(np.count_nonzero(subtitle_pixels.max(axis=2) > 220)), 20)
+
     def test_real_cleanup_cache_miss_hit_skips_reconstruction_and_matches_uncached(self) -> None:
         ffmpeg = shutil.which("ffmpeg")
         ffprobe = shutil.which("ffprobe")
@@ -82,6 +147,9 @@ class RealMediaSmokeTests(unittest.TestCase):
         config = replace(
             config, ffmpeg=ffmpeg, ffprobe=ffprobe,
             video=replace(config.video, width=320, height=180, preset="ultrafast"),
+            source_cleanup=replace(
+                config.source_cleanup, strategy="frequency_selective_reconstruct"
+            ),
         )
         profile = SceneVisualProfile(
             1, "video", 0.02, 0.0, 0.1, "normal", "normal", True,
@@ -141,6 +209,9 @@ class RealMediaSmokeTests(unittest.TestCase):
         config = replace(
             config, ffmpeg=ffmpeg, ffprobe=ffprobe,
             video=replace(config.video, width=320, height=180, preset="ultrafast"),
+            source_cleanup=replace(
+                config.source_cleanup, strategy="frequency_selective_reconstruct"
+            ),
         )
         profile = SceneVisualProfile(
             1, "video", 0.02, 0.0, 0.1, "normal", "low", True,
@@ -226,6 +297,10 @@ class RealMediaSmokeTests(unittest.TestCase):
         config = replace(
             config, ffmpeg=ffmpeg, ffprobe=ffprobe,
             video=replace(config.video, width=320, height=180, preset="ultrafast"),
+            source_cleanup=replace(
+                config.source_cleanup, cover_logo_width=37,
+                cover_margin_right=3, cover_margin_bottom=3,
+            ),
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -449,6 +524,9 @@ class RealMediaSmokeTests(unittest.TestCase):
         config = replace(
             config, ffmpeg=ffmpeg, ffprobe=ffprobe,
             video=replace(config.video, width=320, height=180, preset="ultrafast"),
+            source_cleanup=replace(
+                config.source_cleanup, strategy="frequency_selective_reconstruct"
+            ),
             watermark=replace(
                 config.watermark, logo_width=18,
                 margin_right=14, margin_bottom=12,

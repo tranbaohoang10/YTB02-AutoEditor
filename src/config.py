@@ -120,6 +120,9 @@ class SourceCleanupConfig:
     paper_margin_px: int
     crop_width_ratio: float
     crop_height_ratio: float
+    cover_logo_width: int
+    cover_margin_right: int
+    cover_margin_bottom: int
 
 
 @dataclass(frozen=True)
@@ -352,6 +355,9 @@ def load_config(path: Path) -> AppConfig:
                 crop_height_ratio=float(
                     source_cleanup.get("crop_height_ratio", 0.885185185)
                 ),
+                cover_logo_width=int(source_cleanup.get("cover_logo_width", 224)),
+                cover_margin_right=int(source_cleanup.get("cover_margin_right", 20)),
+                cover_margin_bottom=int(source_cleanup.get("cover_margin_bottom", 20)),
             ),
             visual_quality=VisualQualityConfig(
                 enabled=visual_quality_enabled,
@@ -523,12 +529,14 @@ def load_config(path: Path) -> AppConfig:
     cleanup = result.source_cleanup
     if cleanup.strategy not in {
         "frequency_selective_reconstruct",
+        "cover_with_official_logo",
         "masked_median_blend", "paper_corner_patch", "safe_edge_crop",
         "median_texture_patch",
     }:
         raise AutoEditorError(
             "source_cleanup.strategy chỉ hỗ trợ frequency_selective_reconstruct/"
-            "masked_median_blend/paper_corner_patch/safe_edge_crop/"
+            "cover_with_official_logo/masked_median_blend/"
+            "paper_corner_patch/safe_edge_crop/"
             "median_texture_patch."
         )
     if cleanup.target != "gemini_flow_sparkle":
@@ -549,6 +557,10 @@ def load_config(path: Path) -> AppConfig:
         0.5 <= cleanup.crop_height_ratio <= 1.0
     ):
         raise AutoEditorError("Source-cleanup crop ratios phải trong 0.5..1.0.")
+    if not 76 <= cleanup.cover_logo_width <= 512:
+        raise AutoEditorError("source_cleanup.cover_logo_width phải trong 76..512.")
+    if min(cleanup.cover_margin_right, cleanup.cover_margin_bottom) < 0:
+        raise AutoEditorError("Source-cover margins không được âm.")
     quality = result.visual_quality
     if not 80 <= quality.analysis_width <= 960 or not 2 <= quality.sample_frames <= 30:
         raise AutoEditorError("Visual-quality analysis_width/sample_frames không hợp lệ.")
@@ -573,6 +585,19 @@ def load_config(path: Path) -> AppConfig:
     if not result.watermark.logo_file.is_file():
         raise AutoEditorError(
             f"Không tìm thấy watermark.logo_file: {result.watermark.logo_file}"
+        )
+    official_logo = (path.parent / "assets/branding/l0ki_archives_logo.png").resolve()
+    if (
+        cleanup.strategy == "cover_with_official_logo"
+        and result.watermark.logo_file != official_logo
+    ):
+        raise AutoEditorError(
+            "cover_with_official_logo chỉ được dùng asset chính thức "
+            "assets/branding/l0ki_archives_logo.png."
+        )
+    if cleanup.strategy == "cover_with_official_logo" and not result.watermark.enabled:
+        raise AutoEditorError(
+            "cover_with_official_logo yêu cầu watermark.enabled=true để che source mark."
         )
     if not 12 <= result.watermark.logo_width <= 256:
         raise AutoEditorError("watermark.logo_width phải trong khoảng 12..256.")

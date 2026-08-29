@@ -24,7 +24,13 @@ VALID_PROBE = {
 
 class SourceCleanupCacheTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.config = load_config(ROOT / "config.json")
+        config = load_config(ROOT / "config.json")
+        self.config = replace(
+            config,
+            source_cleanup=replace(
+                config.source_cleanup, strategy="frequency_selective_reconstruct"
+            ),
+        )
 
     @staticmethod
     def _create_fake_cache(*args, **kwargs) -> None:
