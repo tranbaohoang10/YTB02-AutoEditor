@@ -121,8 +121,11 @@ class SourceCleanupConfig:
     crop_width_ratio: float
     crop_height_ratio: float
     cover_logo_width: int
+    cover_logo_opacity: float
     cover_margin_right: int
     cover_margin_bottom: int
+    cover_nudge_left: int
+    cover_nudge_up: int
 
 
 @dataclass(frozen=True)
@@ -355,9 +358,14 @@ def load_config(path: Path) -> AppConfig:
                 crop_height_ratio=float(
                     source_cleanup.get("crop_height_ratio", 0.885185185)
                 ),
-                cover_logo_width=int(source_cleanup.get("cover_logo_width", 224)),
-                cover_margin_right=int(source_cleanup.get("cover_margin_right", 20)),
-                cover_margin_bottom=int(source_cleanup.get("cover_margin_bottom", 20)),
+                cover_logo_width=int(source_cleanup.get("cover_logo_width", 110)),
+                cover_logo_opacity=float(
+                    source_cleanup.get("cover_logo_opacity", 0.42)
+                ),
+                cover_margin_right=int(source_cleanup.get("cover_margin_right", 14)),
+                cover_margin_bottom=int(source_cleanup.get("cover_margin_bottom", 14)),
+                cover_nudge_left=int(source_cleanup.get("cover_nudge_left", 111)),
+                cover_nudge_up=int(source_cleanup.get("cover_nudge_up", 112)),
             ),
             visual_quality=VisualQualityConfig(
                 enabled=visual_quality_enabled,
@@ -557,10 +565,15 @@ def load_config(path: Path) -> AppConfig:
         0.5 <= cleanup.crop_height_ratio <= 1.0
     ):
         raise AutoEditorError("Source-cleanup crop ratios phải trong 0.5..1.0.")
-    if not 76 <= cleanup.cover_logo_width <= 512:
-        raise AutoEditorError("source_cleanup.cover_logo_width phải trong 76..512.")
-    if min(cleanup.cover_margin_right, cleanup.cover_margin_bottom) < 0:
-        raise AutoEditorError("Source-cover margins không được âm.")
+    if not 76 <= cleanup.cover_logo_width <= 160:
+        raise AutoEditorError("source_cleanup.cover_logo_width phải trong 76..160.")
+    if not 0.35 <= cleanup.cover_logo_opacity <= 0.50:
+        raise AutoEditorError("source_cleanup.cover_logo_opacity phải trong 0.35..0.50.")
+    if min(
+        cleanup.cover_margin_right, cleanup.cover_margin_bottom,
+        cleanup.cover_nudge_left, cleanup.cover_nudge_up,
+    ) < 0:
+        raise AutoEditorError("Source-cover margins/nudges không được âm.")
     quality = result.visual_quality
     if not 80 <= quality.analysis_width <= 960 or not 2 <= quality.sample_frames <= 30:
         raise AutoEditorError("Visual-quality analysis_width/sample_frames không hợp lệ.")

@@ -75,11 +75,17 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(
             config.source_cleanup.strategy, "cover_with_official_logo"
         )
-        self.assertEqual(config.source_cleanup.cover_logo_width, 224)
+        self.assertEqual(config.source_cleanup.cover_logo_width, 110)
+        self.assertEqual(config.source_cleanup.cover_logo_opacity, 0.42)
         self.assertEqual(
             (config.source_cleanup.cover_margin_right,
              config.source_cleanup.cover_margin_bottom),
-            (20, 20),
+            (14, 14),
+        )
+        self.assertEqual(
+            (config.source_cleanup.cover_nudge_left,
+             config.source_cleanup.cover_nudge_up),
+            (111, 112),
         )
         self.assertEqual(
             (config.source_cleanup.median_radius, config.source_cleanup.feather_px),

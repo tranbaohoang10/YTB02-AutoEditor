@@ -347,17 +347,20 @@ class VideoBuilderTests(unittest.TestCase):
         video_filter = command[command.index("-vf") + 1]
         self.assertEqual(video_filter.count("movie="), 1)
         self.assertEqual(video_filter.count("l0ki_archives_logo.png"), 1)
-        self.assertIn("nullsrc=s=224x224", video_filter)
-        self.assertIn("scale=224:224:force_original_aspect_ratio=decrease", video_filter)
-        self.assertIn("overlay=x=W-w-20:y=H-h-20", video_filter)
-        self.assertLess(video_filter.index("[in][coverbadge]overlay="),
+        self.assertNotIn("nullsrc=", video_filter)
+        self.assertNotIn("geq=", video_filter)
+        self.assertIn("scale=110:110:force_original_aspect_ratio=decrease", video_filter)
+        self.assertIn("colorchannelmixer=aa=0.420[coverlogo]", video_filter)
+        self.assertIn("overlay=x=W-w-14-111:y=H-h-14-112", video_filter)
+        self.assertEqual(video_filter.count("overlay="), 1)
+        self.assertLess(video_filter.index("[in][coverlogo]overlay="),
                         video_filter.index("ass=filename="))
         self.assertNotIn("brandmark", video_filter)
         self.assertNotIn("brandshadow", video_filter)
         self.assertNotIn("drawtext=", video_filter)
         self.assertNotIn("Hau Nguyen", video_filter)
 
-    def test_fast_cover_circle_contains_complete_measured_gemini_envelope(self) -> None:
+    def test_refined_logo_is_small_and_centered_on_measured_gemini_envelope(self) -> None:
         config = load_config(ROOT / "config.json")
         cleanup = config.source_cleanup
         x, y, width, height = source_cleanup_geometry(
@@ -368,15 +371,21 @@ class VideoBuilderTests(unittest.TestCase):
         support_x += x
         support_y += y
         size = cleanup.cover_logo_width
-        left = config.video.width - size - cleanup.cover_margin_right
-        top = config.video.height - size - cleanup.cover_margin_bottom
+        left = (
+            config.video.width - size - cleanup.cover_margin_right
+            - cleanup.cover_nudge_left
+        )
+        top = (
+            config.video.height - size - cleanup.cover_margin_bottom
+            - cleanup.cover_nudge_up
+        )
         center_x = left + (size - 1) / 2
         center_y = top + (size - 1) / 2
-        radius = size / 2 - 2
-        self.assertTrue(np.all(
-            (support_x - center_x) ** 2 + (support_y - center_y) ** 2
-            <= radius ** 2
-        ))
+        self.assertLess(cleanup.cover_logo_width, 224)
+        self.assertLessEqual(support_x.min(), center_x)
+        self.assertGreaterEqual(support_x.max(), center_x)
+        self.assertLessEqual(support_y.min(), center_y)
+        self.assertGreaterEqual(support_y.max(), center_y)
 
     def test_final_encode_signals_limited_bt709_contract(self) -> None:
         config = load_config(ROOT / "config.json")
