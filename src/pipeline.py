@@ -173,10 +173,18 @@ def _prepare_scenes(
         asset = assets[entry.scene.id]
         print(f"       Scene {entry.scene.id:02d} {asset.kind} -> {target_duration:.2f} sec")
         if asset.kind == "video":
+            profile = (visual_profiles or {}).get(entry.scene.id)
+            def cleanup_progress(status: str, scene_id: int = entry.scene.id) -> None:
+                if status in {"HIT", "MISS"}:
+                    print(f"       Scene {scene_id:02d} | cleanup cache {status}")
+                elif status == "PROCESSING":
+                    print("                processing...")
             prepare_video_scene(
                 asset.path, destination, target_duration, config,
                 source_duration=probe_duration(asset.path, config.ffprobe),
-                visual_profile=(visual_profiles or {}).get(entry.scene.id),
+                visual_profile=profile,
+                cleanup_cache_dir=scenes_dir.parent / "cache" / "source_cleanup",
+                cleanup_progress=cleanup_progress,
             )
         elif asset.kind == "layered":
             manifest = load_layered_manifest(
