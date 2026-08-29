@@ -8,7 +8,7 @@ import wave
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .config import AppConfig
 from .ffmpeg_utils import ffmpeg_filter_path, run_media_command, write_concat_file
@@ -16,6 +16,7 @@ from .layered_manifest import SceneTransition
 from .models import AutoEditorError
 from .narration import PauseCompressionReport, compress_smart_pauses
 from .source_cleanup import run_frequency_cleanup_pipeline
+from .source_cleanup_cache import get_or_create_cleanup_cache
 from .visual_quality import (
     SceneVisualProfile, ensure_flow_gemini_mask, ensure_paper_corner_patch,
     source_cleanup_geometry, source_edge_crop_geometry, source_paper_patch_geometry,
@@ -193,6 +194,8 @@ def prepare_video_scene(
     source: Path, destination: Path, duration: float, config: AppConfig,
     *, source_duration: float | None = None,
     visual_profile: SceneVisualProfile | None = None,
+    cleanup_cache_dir: Path | None = None,
+    cleanup_progress: Callable[[str], None] | None = None,
 ) -> None:
     video = config.video
     cleanup_source = bool(
@@ -205,15 +208,25 @@ def prepare_video_scene(
         cleanup_source
         and config.source_cleanup.strategy == "frequency_selective_reconstruct"
     )
+    cached_cleanup = None
+    if frequency_cleanup and cleanup_cache_dir is not None:
+        if source_duration is None:
+            from .media_qc import probe_video
+            source_duration = probe_video(source, config.ffprobe)["duration"]
+        cached_cleanup = get_or_create_cleanup_cache(
+            source, cleanup_cache_dir, source_duration, config,
+            progress=cleanup_progress,
+        )
+    direct_frequency_cleanup = frequency_cleanup and cached_cleanup is None
     command = [config.ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
-    if frequency_cleanup:
+    if direct_frequency_cleanup:
         command.extend([
             "-f", "rawvideo", "-pixel_format", "bgr24",
             "-video_size", f"{video.width}x{video.height}",
             "-framerate", str(video.fps), "-i", "pipe:0",
         ])
     else:
-        command.extend(["-i", str(source)])
+        command.extend(["-i", str(cached_cleanup.path if cached_cleanup else source)])
     base_filters: list[str] = []
     if cleanup_source and config.source_cleanup.strategy == "safe_edge_crop":
         crop_width, crop_height = source_edge_crop_geometry(
@@ -232,7 +245,7 @@ def prepare_video_scene(
     base = ",".join(base_filters)
     graph_parts: list[str] = []
     prepared_label = "preparedbase"
-    if frequency_cleanup:
+    if direct_frequency_cleanup:
         graph_parts.append(f"[0:v]{base}[normalized]")
         source_label = "normalized"
     elif cleanup_source and config.source_cleanup.strategy == "paper_corner_patch":
@@ -371,7 +384,7 @@ def prepare_video_scene(
         "-color_primaries", "bt709", "-color_trc", "bt709", "-r", str(video.fps),
         "-video_track_timescale", "90000", str(destination),
     ])
-    if frequency_cleanup:
+    if direct_frequency_cleanup:
         geometry = source_cleanup_geometry(
             video.width, video.height, config.source_cleanup
         )

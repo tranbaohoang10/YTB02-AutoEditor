@@ -9,6 +9,7 @@ import unittest
 import wave
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageChops
@@ -20,6 +21,7 @@ from src.layered_composer import render_layered_scene
 from src.layered_manifest import SceneTransition, load_layered_manifest
 from src.media_qc import probe_video
 from src.source_cleanup import flow_watermark_alpha
+from src import source_cleanup_cache
 from src.video_builder import (
     SourceAudioClip, build_source_audio_mix, concat_audio_scenes,
     concat_video_scenes_with_transitions, render_final_video,
@@ -71,6 +73,65 @@ def _probe_streams(path: Path, ffprobe: str) -> dict:
 
 @unittest.skipUnless(os.environ.get("YTB_RUN_REAL_MEDIA") == "1", "real FFmpeg smoke is opt-in")
 class RealMediaSmokeTests(unittest.TestCase):
+    def test_real_cleanup_cache_miss_hit_skips_reconstruction_and_matches_uncached(self) -> None:
+        ffmpeg = shutil.which("ffmpeg")
+        ffprobe = shutil.which("ffprobe")
+        self.assertIsNotNone(ffmpeg)
+        self.assertIsNotNone(ffprobe)
+        config = load_config(ROOT / "config.json")
+        config = replace(
+            config, ffmpeg=ffmpeg, ffprobe=ffprobe,
+            video=replace(config.video, width=320, height=180, preset="ultrafast"),
+        )
+        profile = SceneVisualProfile(
+            1, "video", 0.02, 0.0, 0.1, "normal", "normal", True,
+        )
+        events: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.mp4"
+            subprocess.run([
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=0.4",
+                "-an", "-c:v", "libx264", "-preset", "ultrafast",
+                "-pix_fmt", "yuv420p", str(source),
+            ], check=True)
+            uncached = root / "uncached.mp4"
+            prepare_video_scene(
+                source, uncached, 0.4, config, source_duration=0.4,
+                visual_profile=profile,
+            )
+            with patch(
+                "src.source_cleanup_cache.run_frequency_cleanup_pipeline",
+                wraps=source_cleanup_cache.run_frequency_cleanup_pipeline,
+            ) as cleanup:
+                cached_first = root / "cached_first.mp4"
+                cached_second = root / "cached_second.mp4"
+                cache_dir = root / "cache"
+                prepare_video_scene(
+                    source, cached_first, 0.4, config, source_duration=0.4,
+                    visual_profile=profile, cleanup_cache_dir=cache_dir,
+                    cleanup_progress=events.append,
+                )
+                prepare_video_scene(
+                    source, cached_second, 0.4, config, source_duration=0.4,
+                    visual_profile=profile, cleanup_cache_dir=cache_dir,
+                    cleanup_progress=events.append,
+                )
+            def frame_bytes(path: Path) -> bytes:
+                return subprocess.run([
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(path),
+                    "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
+                ], check=True, capture_output=True).stdout
+            direct_frame = np.frombuffer(frame_bytes(uncached), dtype=np.uint8).astype(np.float32)
+            cached_frame = np.frombuffer(frame_bytes(cached_second), dtype=np.uint8).astype(np.float32)
+            mean_absolute_difference = float(np.mean(np.abs(direct_frame - cached_frame)))
+            cache_files = tuple((root / "cache").glob("*.mp4"))
+        self.assertEqual(events, ["MISS", "PROCESSING", "HIT"])
+        self.assertEqual(cleanup.call_count, 1)
+        self.assertEqual(len(cache_files), 1)
+        self.assertLess(mean_absolute_difference, 2.0)
+
     def test_real_flow_sparkle_cleanup_removes_logo_before_final(self) -> None:
         ffmpeg = shutil.which("ffmpeg")
         ffprobe = shutil.which("ffprobe")
