@@ -72,7 +72,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.watermark.shadow_opacity, 0.16)
         self.assertEqual(config.watermark.shadow_blur, 0.45)
         self.assertTrue(config.source_cleanup.enabled)
-        self.assertEqual(config.source_cleanup.strategy, "masked_median_blend")
+        self.assertEqual(
+            config.source_cleanup.strategy, "frequency_selective_reconstruct"
+        )
         self.assertEqual(
             (config.source_cleanup.median_radius, config.source_cleanup.feather_px),
             (30, 3),

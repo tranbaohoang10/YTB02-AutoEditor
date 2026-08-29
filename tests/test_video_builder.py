@@ -247,28 +247,32 @@ class VideoBuilderTests(unittest.TestCase):
         self.assertIn("vignette=angle=", graph)
         self.assertIn("zoompan=", graph)
 
-    def test_default_cleanup_uses_precise_masked_median_without_global_patch(self) -> None:
+    def test_default_cleanup_streams_local_frequency_reconstruction_before_quality(self) -> None:
         config = load_config(ROOT / "config.json")
         profile = SceneVisualProfile(
             3, "video", 0.08, 0.01, 0.08, "high", "low", True,
         )
         with tempfile.TemporaryDirectory() as directory, patch(
-            "src.video_builder.run_media_command"
+            "src.video_builder.run_frequency_cleanup_pipeline"
         ) as run:
             root = Path(directory)
             prepare_video_scene(
                 root / "scene_03.mp4", root / "out.mp4", 3.0, config,
                 source_duration=4.0, visual_profile=profile,
             )
-        command = run.call_args.args[0]
+        command = run.call_args.args[2]
         graph = command[command.index("-filter_complex") + 1]
-        self.assertEqual(command.count("-i"), 2)
-        self.assertIn("flow_gemini_mask_v5_200x200_f3.png", " ".join(command))
-        self.assertIn("median=radius=30", graph)
-        self.assertIn("alphamerge", graph)
-        self.assertIn("overlay=1680:824", graph)
+        self.assertEqual(command.count("-i"), 1)
+        self.assertIn("pipe:0", command)
+        self.assertEqual(run.call_args.kwargs["geometry"], (1680, 824, 200, 200))
+        self.assertEqual(run.call_args.kwargs["decode_duration"], 3.0)
+        self.assertIn("setsar=1", graph)
+        self.assertNotIn("median=", graph)
+        self.assertNotIn("alphamerge", graph)
+        self.assertNotIn("overlay=", graph)
         self.assertNotIn("crop=1700:956:0:0", graph)
         self.assertNotIn("paper_corner_patch", " ".join(command))
+        self.assertLess(graph.index("setsar=1"), graph.index("eq=contrast="))
 
     def test_cleanup_motion_keeps_bottom_right_roi_anchored(self) -> None:
         config = load_config(ROOT / "config.json")
@@ -276,14 +280,14 @@ class VideoBuilderTests(unittest.TestCase):
             3, "video", 0.08, 0.01, 0.08, "high", "low", True,
         )
         with tempfile.TemporaryDirectory() as directory, patch(
-            "src.video_builder.run_media_command"
+            "src.video_builder.run_frequency_cleanup_pipeline"
         ) as run:
             root = Path(directory)
             prepare_video_scene(
                 root / "scene_03.mp4", root / "out.mp4", 5.2, config,
                 source_duration=4.0, visual_profile=profile,
             )
-        command = run.call_args.args[0]
+        command = run.call_args.args[2]
         graph = command[command.index("-filter_complex") + 1]
         self.assertEqual(
             graph.count("x='iw-iw/zoom':y='ih-ih/zoom'"),

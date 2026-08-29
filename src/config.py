@@ -335,7 +335,9 @@ def load_config(path: Path) -> AppConfig:
             ),
             source_cleanup=SourceCleanupConfig(
                 enabled=source_cleanup_enabled,
-                strategy=str(source_cleanup.get("strategy", "masked_median_blend")),
+                strategy=str(source_cleanup.get(
+                    "strategy", "frequency_selective_reconstruct"
+                )),
                 target=str(source_cleanup.get("target", "gemini_flow_sparkle")),
                 x_ratio=float(source_cleanup.get("x_ratio", 0.875)),
                 y_ratio=float(source_cleanup.get("y_ratio", 0.764)),
@@ -520,12 +522,14 @@ def load_config(path: Path) -> AppConfig:
         raise AutoEditorError("Subtitle margin_horizontal không hợp lệ.")
     cleanup = result.source_cleanup
     if cleanup.strategy not in {
+        "frequency_selective_reconstruct",
         "masked_median_blend", "paper_corner_patch", "safe_edge_crop",
         "median_texture_patch",
     }:
         raise AutoEditorError(
-            "source_cleanup.strategy chỉ hỗ trợ masked_median_blend/"
-            "paper_corner_patch/safe_edge_crop/median_texture_patch."
+            "source_cleanup.strategy chỉ hỗ trợ frequency_selective_reconstruct/"
+            "masked_median_blend/paper_corner_patch/safe_edge_crop/"
+            "median_texture_patch."
         )
     if cleanup.target != "gemini_flow_sparkle":
         raise AutoEditorError("source_cleanup.target hiện chỉ hỗ trợ gemini_flow_sparkle.")

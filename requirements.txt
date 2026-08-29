@@ -3,4 +3,5 @@ soundfile>=0.12,<1
 pytest>=8,<9
 whisperx==3.8.6
 Pillow>=11,<12
+opencv-python-headless>=4.10,<5
 google-genai>=1.75,<2
